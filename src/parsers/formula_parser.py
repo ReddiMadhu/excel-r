@@ -195,17 +195,60 @@ def parse_formula_with_library(xl_model, sheet_name, cell_ref, formula_str,
     )
 
 
-def _generate_pattern_from_formula(formula_str, ws_val, current_row, 
+def _clean_criteria_value(crit_val_repr):
+    """
+    Extract a clean, human-readable value from a criteria value representation.
+    
+    Examples:
+      "Summary!K5 ('Flexible')" -> "'Flexible'"
+      "current RBC C2 Product Category" -> "current row"
+      "Col_A" -> "Col_A"
+    """
+    if "current " in crit_val_repr:
+        return "current row"
+    # Look for a value in parentheses e.g. ('Flexible') or ("Flexible")
+    match = re.search(r"\(['\"](.+?)['\"]\)", crit_val_repr)
+    if match:
+        return f"'{match.group(1)}'"
+    # Fall back to stripping quotes
+    return crit_val_repr.strip("\"'")
+
+
+def _build_sql_pattern(func_name, sum_repr, filters, criterias, is_negative=False):
+    """
+    Build a standardized SQL-like formula pattern string.
+    
+    Output format:
+      [-1 * ] FUNC(source[column])
+      [WHERE [col] = 'value' AND ...]
+      [GROUP BY [col1], [col2]]
+    """
+    pattern = f"{func_name}({sum_repr})"
+    if filters:
+        where_parts = []
+        for f in filters:
+            # f is already in format "ColumnName = value"
+            where_parts.append(f"[{f}]")
+        pattern += " WHERE " + " AND ".join(where_parts)
+    if criterias:
+        group_parts = [f"[{c}]" for c in criterias]
+        pattern += " GROUP BY " + ", ".join(group_parts)
+    if is_negative:
+        pattern = f"-1 * {pattern}"
+    return pattern
+
+
+def _generate_pattern_from_formula(formula_str, ws_val, current_row,
                                     raw_column_maps, table_col_mapping):
     """
-    Generate a human-readable formula pattern from a raw formula string.
-    Replaces cell references with header names.
+    Generate a human-readable SQL-like formula pattern from a raw formula string.
+    Replaces cell references with header names, respecting function structure.
     """
     if not formula_str:
         return ""
-    
+
     pattern = formula_str.lstrip('=')
-    
+
     # Replace sheet!column:column references (e.g., SQL_data!D:D)
     sheet_col_refs = re.findall(
         r"'?([A-Za-z_][A-Za-z0-9_ ]*)'?!\$?([A-Z]+):\$?([A-Z]+)", pattern
@@ -213,37 +256,31 @@ def _generate_pattern_from_formula(formula_str, ws_val, current_row,
     for sheet, col1, col2 in sheet_col_refs:
         if sheet in raw_column_maps:
             header = raw_column_maps[sheet].get(col1.upper(), f"Col_{col1}")
-            old_ref = f"{sheet}!{col1}:{col2}"
-            # Also try with quotes and $ signs
             pattern = pattern.replace(f"'{sheet}'!${col1}:${col2}", f"{sheet}[{header}]")
             pattern = pattern.replace(f"'{sheet}'!{col1}:{col2}", f"{sheet}[{header}]")
             pattern = pattern.replace(f"{sheet}!${col1}:${col2}", f"{sheet}[{header}]")
             pattern = pattern.replace(f"{sheet}!{col1}:{col2}", f"{sheet}[{header}]")
-    
+
     # Replace local cell references (e.g., $A6, B$6, A6)
     cell_refs = re.findall(r'\$?([A-Z]+)\$?(\d+)', pattern)
     for col_letter, row_str in set(cell_refs):
         row_num = int(row_str)
         col_idx = column_index_from_string(col_letter)
-        
         header = table_col_mapping.get(col_idx, f"Col_{col_letter}")
-        
         if row_num == current_row:
-            replacement = f"current {header}"
+            replacement = "current row"
         else:
             val = ws_val.cell(row=row_num, column=col_idx).value
             if val is not None:
-                replacement = f'{header} ("{val}")'
+                replacement = f"'{val}'"
             else:
                 replacement = f"{col_letter}{row_str}"
-        
-        # Replace carefully to avoid partial matches
         pattern = re.sub(
             rf'\$?{col_letter}\$?{row_str}\b',
             replacement,
             pattern
         )
-    
+
     return pattern
 
 
@@ -471,40 +508,48 @@ def parse_formula(formula_str, current_row, summary_ws_val, raw_column_maps, tab
                     break
                 crit_range_ref = args[i]
                 crit_val_ref = args[i+1]
-                
-                crit_range_repr, crit_range_hdr, crit_sheet = translate_reference(crit_range_ref, current_row, summary_ws_val, raw_column_maps, table_col_mapping, detected_tables)
-                crit_val_repr, crit_val_hdr, _ = translate_reference(crit_val_ref, current_row, summary_ws_val, raw_column_maps, table_col_mapping, detected_tables)
-                
+
+                crit_range_repr, crit_range_hdr, crit_sheet = translate_reference(
+                    crit_range_ref, current_row, summary_ws_val,
+                    raw_column_maps, table_col_mapping, detected_tables
+                )
+                crit_val_repr, crit_val_hdr, _ = translate_reference(
+                    crit_val_ref, current_row, summary_ws_val,
+                    raw_column_maps, table_col_mapping, detected_tables
+                )
+
                 if crit_range_hdr:
                     data_source_columns.add(crit_range_hdr)
                     if crit_sheet:
                         data_source_sheet = crit_sheet
+
+                col_label = crit_range_hdr if crit_range_hdr else crit_range_repr
+
+                # Classify using $ pattern — the definitive way to detect GROUP BY vs WHERE
+                from src.parsers.formula_lineage import classify_criteria_ref, extract_filter_value
+                ref_type = classify_criteria_ref(crit_val_ref, current_row)
+
+                if ref_type == 'group_by_key':
+                    criterias.append(col_label)
                     formula_source_details.append({
-                        "column_name": crit_range_hdr,
-                        "role": "criteria_range"
+                        "column_name": col_label,
+                        "role": "group_by_key"
                     })
-                    
-                if crit_val_hdr:
-                    formula_source_details.append({
-                        "column_name": crit_val_hdr,
-                        "role": "criteria_value"
-                    })
-                    
-                if "current " in crit_val_repr:
-                    criterias.append(crit_range_hdr if crit_range_hdr else crit_range_repr)
                 else:
-                    clean_val = crit_val_repr.split(' ')[-1].strip("()'\"") if ' ' in crit_val_repr else crit_val_repr.strip("'\"")
-                    filters.append(f"{crit_range_hdr if crit_range_hdr else crit_range_repr} = {clean_val}")
-                    
-            pattern = f"SUM({sum_repr})"
-            if criterias:
-                pattern += " GROUP BY " + ", ".join(criterias)
-                
+                    fv = extract_filter_value(crit_val_ref, crit_val_repr, summary_ws_val)
+                    filters.append(f"{col_label} = {fv}")
+                    formula_source_details.append({
+                        "column_name": col_label,
+                        "role": "static_filter",
+                        "filter_value": fv
+                    })
+
+            is_negative = formula_str.strip().startswith('=-1*') or formula_str.strip().startswith('=-')
+            pattern = _build_sql_pattern("SUM", sum_repr, filters, criterias)
             formula_pattern = formula_pattern.replace(call["full_call"], pattern)
-            
-        is_negative = formula_str.strip().startswith('=-1*') or formula_str.strip().startswith('=-')
+
         clean_pattern = formula_pattern.lstrip('=-1*').lstrip('=-').lstrip('=')
-        
+
         return {
             "type": "formula_based",
             "formula_pattern": f"-1 * {clean_pattern}" if is_negative else clean_pattern,
@@ -522,37 +567,53 @@ def parse_formula(formula_str, current_row, summary_ws_val, raw_column_maps, tab
             args = call["args"]
             if len(args) < 2:
                 continue
-                
+
             criterias = []
+            filters = []
             for i in range(0, len(args), 2):
                 if i + 1 >= len(args):
                     break
                 crit_range_ref = args[i]
                 crit_val_ref = args[i+1]
-                
-                crit_range_repr, crit_range_hdr, crit_sheet = translate_reference(crit_range_ref, current_row, summary_ws_val, raw_column_maps, table_col_mapping, detected_tables)
-                crit_val_repr, crit_val_hdr, _ = translate_reference(crit_val_ref, current_row, summary_ws_val, raw_column_maps, table_col_mapping, detected_tables)
-                
+
+                crit_range_repr, crit_range_hdr, crit_sheet = translate_reference(
+                    crit_range_ref, current_row, summary_ws_val,
+                    raw_column_maps, table_col_mapping, detected_tables
+                )
+                crit_val_repr, crit_val_hdr, _ = translate_reference(
+                    crit_val_ref, current_row, summary_ws_val,
+                    raw_column_maps, table_col_mapping, detected_tables
+                )
+
                 if crit_range_hdr:
                     data_source_columns.add(crit_range_hdr)
                     if crit_sheet:
                         data_source_sheet = crit_sheet
+
+                col_label = crit_range_hdr if crit_range_hdr else crit_range_repr
+
+                from src.parsers.formula_lineage import classify_criteria_ref, extract_filter_value
+                ref_type = classify_criteria_ref(crit_val_ref, current_row)
+
+                if ref_type == 'group_by_key':
+                    criterias.append(col_label)
                     formula_source_details.append({
-                        "column_name": crit_range_hdr,
-                        "role": "count_range"
+                        "column_name": col_label,
+                        "role": "group_by_key"
                     })
-                        
-                if "current " in crit_val_repr:
-                    criterias.append(crit_range_hdr if crit_range_hdr else crit_range_repr)
                 else:
-                    clean_val = crit_val_repr.split(' ')[-1].strip("()'\"") if ' ' in crit_val_repr else crit_val_repr.strip("'\"")
-                    
-            pattern = f"COUNT({data_source_sheet})"
-            if criterias:
-                pattern += " GROUP BY " + ", ".join(criterias)
-                
+                    fv = extract_filter_value(crit_val_ref, crit_val_repr, summary_ws_val)
+                    filters.append(f"{col_label} = {fv}")
+                    formula_source_details.append({
+                        "column_name": col_label,
+                        "role": "static_filter",
+                        "filter_value": fv
+                    })
+
+            count_source = data_source_sheet if data_source_sheet else "source"
+            pattern = _build_sql_pattern("COUNT", count_source, filters, criterias)
             formula_pattern = formula_pattern.replace(call["full_call"], pattern)
-            
+
         clean_pattern = formula_pattern.lstrip('=')
         return {
             "type": "formula_based",

@@ -5,7 +5,7 @@ Replaces hardcoded name matching with analysis of actual sheet content:
 formula density, numeric ratio, bold formatting, row count, etc.
 Works regardless of what the sheet is named.
 """
-import formatting_extractor
+import src.extractors.formatting_extractor as formatting_extractor
 
 
 def classify_sheet(sheet_name, ws, all_sheets_info):

@@ -10,7 +10,7 @@ Optional: Uses eparse library for automated table crawling if available.
 """
 import openpyxl
 from openpyxl.utils import get_column_letter, column_index_from_string
-import formatting_extractor
+import src.extractors.formatting_extractor as formatting_extractor
 
 
 # ─────────────────────────────────────────────────────────────────

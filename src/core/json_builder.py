@@ -16,13 +16,14 @@ import time
 import re
 import json
 from openpyxl.utils import get_column_letter
-import formula_parser
-import pivot_parser
-import formatting_extractor
-import workbook_loader
-import structural_summary
-import summary_table_detector
-import llm_client
+import src.parsers.formula_parser as formula_parser
+import src.parsers.pivot_parser as pivot_parser
+import src.extractors.formatting_extractor as formatting_extractor
+import src.extractors.workbook_loader as workbook_loader
+import src.parsers.structural_summary as structural_summary
+import src.parsers.summary_table_detector as summary_table_detector
+import src.utils.llm_client as llm_client
+import src.parsers.formula_lineage as formula_lineage_mod
 
 
 HAS_GENAI_LIB = None
@@ -230,6 +231,17 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             }
 
     for s_name, s_type in sheet_classifications.items():
+        if s_type != "summary_report":
+            # Fast bypass: raw data and helper sheets are not summary reports
+            sheets_json.append({
+                "sheet_name": s_name,
+                "sheet_type": s_type,
+                "filters": [],
+                "pivot_tables": [],
+                "tables": [],
+            })
+            continue
+            
         ws_val = wb_val[s_name]
         ws_form = wb_form[s_name]
         
@@ -557,9 +569,36 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                     f_pattern = p_details["formula_pattern"]
                     fs_details = []
                     for g_field in p_details["group_by_fields"]:
-                        fs_details.append({"column_name": g_field, "role": "criteria_range"})
-                    fs_details.append({"column_name": p_details["source_column"], "role": "sum_range" if p_details["aggregation"] == "SUM" else "count_range"})
+                        fs_details.append({"column_name": g_field, "role": "group_by_key"})
+                    for f_field, f_val in p_details["pivot_filters"].items():
+                        if f_val and f_val != "(All)":
+                            fs_details.append({"column_name": f_field, "role": "static_filter", "filter_value": f"'{f_val}'"})
+                    
+                    role = "sum_range" if p_details["aggregation"] == "SUM" else "count_range"
+                    fs_details.append({"column_name": p_details["source_column"], "role": role})
                     resolved_by = "pivot_xml"
+                    
+                    # Synthesize Excel-like formula for pivot columns
+                    formula_parts = []
+                    source_sheet = p_details["data_source_sheet"]
+                    source_col = p_details["source_column"]
+                    if p_details["aggregation"] == "SUM":
+                        formula_name = "SUMIFS"
+                        formula_parts.append(f"{source_sheet}!{source_col}")
+                    else:
+                        formula_name = "COUNTIFS"
+                        
+                    for g_field in p_details["group_by_fields"]:
+                        formula_parts.append(f"{source_sheet}!{g_field}")
+                        formula_parts.append(f"Summary!{g_field}")
+                        
+                    for f_field, f_val in p_details["pivot_filters"].items():
+                        if f_val and f_val != "(All)":
+                            formula_parts.append(f"{source_sheet}!{f_field}")
+                            formula_parts.append(f"\"{f_val}\"")
+                            
+                    first_formula = f"={formula_name}({', '.join(formula_parts)})"
+                    f_count = 1
                     
                 # Generate definitions
                 definition = ""
@@ -596,22 +635,19 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                     
                 col_info = {
                     "column_name": col_name,
-                    "excel_column": col_letter,
                     "table_name": t_name,
                     "data_type": dtype,
                     "type": col_type,
-                    "data_source_sheet": ds_sheet,
-                    "data_source_columns": ds_cols,
-                    "formula_source_column_count": len(ds_cols),
-                    "formula_source_details": fs_details,
                     "formula": first_formula or "",
                     "formula_count": f_count,
                     "formula_pattern": f_pattern,
-                    "formula_applies_to": f"{col_letter}{data_rows[0]}:{col_letter}{data_rows[-1]}" if data_rows else "",
-                    "resolved_by": resolved_by,
                     "number_format": number_format,
                     "number_format_type": formatting_extractor.get_number_format_type(number_format),
-                    "sample_values": sample_vals[:20],
+                    "sample_values": sample_vals[:3],
+                    # Temporary fields for lineage Pass 2 (will be stripped later)
+                    "formula_source_details": fs_details,
+                    "data_source_sheet": ds_sheet,
+                    "data_source_columns": ds_cols,
                 }
                 
                 # Fetch LLM business definition from the whole-workbook semantic lookup
@@ -638,7 +674,51 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                         col_info["definition"] = f"Raw summary value for {col_name}"
                 
                 columns_json.append(col_info)
-                           # Populate rows JSON with forward-filled labels only if summary sheet
+            
+            # ── Pass 2: Build formula_lineage for every formula column ─────────────
+            # Build a column index: {column_name -> col_info_dict} from all collected columns
+            # This allows lineage resolution across tables within the same sheet
+            col_index = {c["column_name"]: c for c in columns_json}
+            for col_info in columns_json:
+                if col_info.get("type") in ("formula_based", "total", "check", "pivot_value") and col_info.get("formula"):
+                    lineage = formula_lineage_mod.build_formula_lineage(
+                        parsed_result={
+                            "formula_source_details": col_info.get("formula_source_details", []),
+                            "data_source_sheet": col_info.get("data_source_sheet", ""),
+                            "data_source_columns": col_info.get("data_source_columns", []),
+                            "formula_pattern": col_info.get("formula_pattern", ""),
+                        },
+                        formula_str=col_info.get("formula", ""),
+                        all_column_index=col_index,
+                    )
+                    if lineage:
+                        col_info["formula_lineage"] = lineage
+            
+            # Rebuild col_index with lineage now attached (enables cross-table depth-2 resolution)
+            col_index = {c["column_name"]: c for c in columns_json}
+            for col_info in columns_json:
+                if "formula_lineage" in col_info:
+                    lineage = formula_lineage_mod.build_formula_lineage(
+                        parsed_result={
+                            "formula_source_details": col_info.get("formula_source_details", []),
+                            "data_source_sheet": col_info.get("data_source_sheet", ""),
+                            "data_source_columns": col_info.get("data_source_columns", []),
+                            "formula_pattern": col_info.get("formula_pattern", ""),
+                        },
+                        formula_str=col_info.get("formula", ""),
+                        all_column_index=col_index,
+                    )
+                    if lineage:
+                        col_info["formula_lineage"] = lineage
+            # ─────────────────────────────────────────────────────────────────────
+            
+            # Strip temporary lineage resolver inputs from the columns JSON output
+            for col_info in columns_json:
+                col_info.pop("formula_source_details", None)
+                col_info.pop("data_source_sheet", None)
+                col_info.pop("data_source_columns", None)
+            
+            # Populate rows JSON with forward-filled labels only if summary sheet
             rows_json = []
             if s_type == "summary_report":
                 last_label_vals = {col: None for col in row_header_cols}
@@ -695,7 +775,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                     if hierarchy_path:
                         row_entry["hierarchy_path"] = hierarchy_path
                     rows_json.append(row_entry)
-            
+
             # Detect input cells (manual vs formula-driven)
             input_cells = formatting_extractor.detect_input_cells(
                 ws_val, ws_form, 
@@ -708,7 +788,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 "table_name": t_name,
                 "table_type": t_type,
                 "section_title": section_title,
-                "table_range": tbl["table_range"],
+                "table_range": tbl.get("table_range", ""),
                 "header_row": header_rows[-1] if header_rows else row_start,
                 "data_start_row": data_rows[0] if data_rows else row_start,
                 "data_end_row": data_rows[-1] if data_rows else row_end,
@@ -726,6 +806,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             }
             
             # Add hierarchy summary if detected
+            hierarchy = tbl.get("hierarchy", [])
             if hierarchy:
                 indent_levels = set(h.get("indent_level", 0) for h in hierarchy)
                 if len(indent_levels) > 1:
@@ -762,10 +843,10 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
         normalize_pivot_metadata_only(sheet_json)
         
     final_json = {
-        "schema_version": "6.0",
+        "schema_version": "7.0-rationalized",
         "file_name": os.path.basename(file_name),
         "generated_at": datetime.datetime.now().isoformat(),
-        "purpose": workbook_purpose or "Excel summary/report extraction with raw-data lineage and formatting intelligence",
+        "purpose": workbook_purpose or "Excel summary/report extraction for decommission and rationalization",
         "process_flow": process_flow,
         "workbook_metadata": {
             "file_name": os.path.basename(file_name),

@@ -4,14 +4,14 @@ import json
 import glob
 import traceback
 
-import workbook_loader
-import sheet_classifier
-import raw_data_parser
-import pivot_parser
-import summary_table_detector
-import json_builder
-import validation
-import formula_parser
+import src.extractors.workbook_loader as workbook_loader
+import src.extractors.sheet_classifier as sheet_classifier
+import src.parsers.raw_data_parser as raw_data_parser
+import src.parsers.pivot_parser as pivot_parser
+import src.parsers.summary_table_detector as summary_table_detector
+import src.core.json_builder as json_builder
+import src.utils.validation as validation
+import src.parsers.formula_parser as formula_parser
 
 try:
     from dotenv import load_dotenv
@@ -171,8 +171,8 @@ Summary sheets contain plain ranges instead of formal Excel table objects. The p
 
 def main():
     parser = argparse.ArgumentParser(description="Excel-to-JSON Summary Extractor")
-    parser.add_argument("--input_dir", default=".", help="Directory containing Excel files")
-    parser.add_argument("--output_dir", default=".", help="Directory to save JSON output files")
+    parser.add_argument("--input_dir", default="data/input", help="Directory containing Excel files")
+    parser.add_argument("--output_dir", default="data/output", help="Directory to save JSON output files")
     parser.add_argument("--file", help="Path to a single specific Excel file to process")
     args = parser.parse_args()
     
@@ -182,10 +182,13 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     
     if args.file:
-        file_path = os.path.abspath(args.file)
+        file_path = args.file
         if not os.path.exists(file_path):
-            print(f"Error: File not found: {file_path}")
-            return
+            file_path = os.path.join(input_dir, args.file)
+            if not os.path.exists(file_path):
+                print(f"Error: File not found: {args.file} or {file_path}")
+                return
+        file_path = os.path.abspath(file_path)
         files_to_process = [file_path]
         print(f"Processing single file: {file_path}")
     else:

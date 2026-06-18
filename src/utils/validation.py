@@ -17,6 +17,9 @@ def validate_extracted_json(json_data):
     file_name = json_data.get("file_name", "")
     sheets = json_data.get("sheets", [])
     
+    schema_version = json_data.get("schema_version", "")
+    is_rationalized = (schema_version == "7.0-rationalized")
+    
     # 1. Sheet scope checks
     if len(sheets) == 0:
         warnings.append("No sheets found in the JSON output.")
@@ -37,12 +40,13 @@ def validate_extracted_json(json_data):
             t_name = t.get("table_name", "")
             t_range = t.get("table_range", "")
             
-            if not t_range:
-                warnings.append(f"Table '{t_name}' is missing a table_range.")
-            if t.get("row_count", 0) == 0:
-                warnings.append(f"Table '{t_name}' ({t_range}) has 0 data rows.")
-            if t.get("column_count", 0) == 0:
-                warnings.append(f"Table '{t_name}' ({t_range}) has 0 columns.")
+            if not is_rationalized:
+                if not t_range:
+                    warnings.append(f"Table '{t_name}' is missing a table_range.")
+                if t.get("row_count", 0) == 0:
+                    warnings.append(f"Table '{t_name}' ({t_range}) has 0 data rows.")
+                if t.get("column_count", 0) == 0:
+                    warnings.append(f"Table '{t_name}' ({t_range}) has 0 columns.")
                 
             # Column-level checks
             formula_based_count = 0
@@ -64,12 +68,18 @@ def validate_extracted_json(json_data):
                     formula_based_count += 1
                     if col.get("formula_count", 0) == 0:
                         warnings.append(f"Column '{col_name}' in table '{t_name}' is formula_based but has 0 formula_count.")
-                    if not col.get("data_source_columns"):
-                        unresolved_count += 1
-                        warnings.append(f"Column '{col_name}' in table '{t_name}' is formula_based but raw data source column could not be mapped.")
+                    if is_rationalized:
+                        if "formula_lineage" not in col:
+                            unresolved_count += 1
+                            warnings.append(f"Column '{col_name}' in table '{t_name}' is formula_based but formula_lineage is missing.")
+                    else:
+                        if not col.get("data_source_columns"):
+                            unresolved_count += 1
+                            warnings.append(f"Column '{col_name}' in table '{t_name}' is formula_based but raw data source column could not be mapped.")
                 elif col_type == "pivot_value":
-                    if not col.get("data_source_columns"):
-                        warnings.append(f"Column '{col_name}' in table '{t_name}' is pivot_value but source column could not be resolved from pivot cache.")
+                    if not is_rationalized:
+                        if not col.get("data_source_columns"):
+                            warnings.append(f"Column '{col_name}' in table '{t_name}' is pivot_value but source column could not be resolved from pivot cache.")
             
             # Resolution quality summary
             if formula_based_count > 0:
