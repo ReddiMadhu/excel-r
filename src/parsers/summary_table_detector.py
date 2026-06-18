@@ -125,6 +125,11 @@ def classify_table_rows(ws_val, ws_form, row_start, row_end, col_start, col_end)
         if analysis["is_blank"]:
             continue
         
+        # Merged section title at the start of the table block
+        if r == row_start and analysis["non_empty_count"] == 1 and col_end > col_start:
+            title_rows.append(r)
+            continue
+            
         first_val = analysis.get("first_value", "")
         
         # Check rows
@@ -159,7 +164,7 @@ def classify_table_rows(ws_val, ws_form, row_start, row_end, col_start, col_end)
     # 3. Find the first data row
     data_start_row = None
     for r in range(row_start, row_end + 1):
-        if r in total_rows or r in check_rows:
+        if r in total_rows or r in check_rows or r in title_rows:
             continue
         
         analysis = row_analyses[r]
@@ -192,7 +197,7 @@ def classify_table_rows(ws_val, ws_form, row_start, row_end, col_start, col_end)
     
     # 4. Classify rows before data_start_row as title or header
     for r in range(row_start, data_start_row):
-        if r in total_rows or r in check_rows:
+        if r in total_rows or r in check_rows or r in title_rows:
             continue
         
         analysis = row_analyses[r]
