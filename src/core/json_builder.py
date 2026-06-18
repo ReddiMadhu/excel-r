@@ -88,7 +88,17 @@ Please generate a JSON object with the following schema:
 Your response must be a single raw JSON object matching the schema above. Do not include any introductory remarks, markdown wraps, or explanations outside the JSON. Start directly with the opening curly brace '{{'."""
 
     try:
-        response = llm.invoke(prompt)
+        print("  [LLM] Sending skeleton to LLM for semantic analysis...")
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(llm.invoke, prompt)
+            try:
+                response = future.result(timeout=60)  # 60-second timeout
+            except concurrent.futures.TimeoutError:
+                print("  [LLM] WARNING: LLM call timed out after 60s — skipping semantic analysis.")
+                future.cancel()
+                return None
+        print("  [LLM] Received LLM response, parsing...")
         response_text = llm_client.stringify_chat_content(response.content).strip()
         
         if response_text.startswith("```json"):
@@ -226,8 +236,6 @@ def generate_table_business_definition(t_name, columns, row_headers):
     measures = [c["column_name"] for c in columns if c["type"] in ("formula_based", "pivot_value", "total", "check")]
     dimensions = [c["column_name"] for c in columns if c["type"] == "label"]
     
-    grain = f"One row per {', '.join(row_headers)}" if row_headers else "Flat list of values"
-    
     purpose = f"Summary report showing {', '.join(measures[:3])}" if measures else "Data table"
     if row_headers:
         purpose += f" grouped by {', '.join(row_headers)}"
@@ -235,7 +243,6 @@ def generate_table_business_definition(t_name, columns, row_headers):
     
     return {
         "business_purpose": purpose,
-        "grain": grain,
         "measures": measures,
         "dimensions": dimensions
     }
@@ -295,16 +302,6 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             }
 
     for s_name, s_type in sheet_classifications.items():
-        if s_type != "summary_report":
-            # Fast bypass: raw data and helper sheets are not summary reports
-            sheets_json.append({
-                "sheet_name": s_name,
-                "sheet_type": s_type,
-                "filters": [],
-                "pivot_tables": [],
-                "tables": [],
-            })
-            continue
             
         ws_val = wb_val[s_name]
         ws_form = wb_form[s_name]
@@ -816,9 +813,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 "row_count": len(data_rows),
                 "column_count": len(headers),
                 "input_cell_count": len(input_cells),
-                "definition": t_sem.get("definition") or table_sem_info["business_purpose"],
                 "business_purpose": t_sem.get("definition") or table_sem_info["business_purpose"],
-                "grain": table_sem_info["grain"],
                 "measures": table_sem_info["measures"],
                 "dimensions": table_sem_info["dimensions"],
                 "inter_table_relationships": t_sem.get("inter_table_relationships", []),
@@ -859,6 +854,58 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             "tables": tables_json,
         })
         
+    # ── Cross-sheet lineage resolution pass ─────────────────────────────
+    # Build a workbook-wide column index from ALL sheets' tables' columns
+    # so that cross-sheet formula dependencies are correctly traced.
+    # e.g. Summary pivot SUMIFS(Synthetic_Data!GA Stat Reserve) should detect
+    #       that GA Stat Reserve on Synthetic_Data is itself formula_based.
+    global_col_index = {}
+    for sheet_json in sheets_json:
+        for table in sheet_json.get("tables", []):
+            for col in table.get("columns", []):
+                col_name = col.get("column_name", "")
+                if col_name:
+                    global_col_index[col_name] = col
+
+    # Re-run lineage for every formula column using the global index
+    for sheet_json in sheets_json:
+        for table in sheet_json.get("tables", []):
+            for col_info in table.get("columns", []):
+                lineage = col_info.get("formula_lineage")
+                if not lineage:
+                    continue
+                # Re-resolve direct_inputs with global knowledge
+                new_direct_inputs = []
+                changed = False
+                for inp in lineage.get("direct_inputs", []):
+                    col_name = inp.get("column", "")
+                    known = global_col_index.get(col_name)
+                    was_raw = inp.get("is_raw", True)
+                    actually_raw = (known is None) or (known.get("type", "raw") == "raw")
+                    if was_raw and not actually_raw and known and "formula_lineage" in known:
+                        # This column was wrongly marked raw; it's actually computed
+                        new_inp = dict(inp)
+                        new_inp["is_raw"] = False
+                        new_inp["table"] = known.get("table_name", inp.get("table", ""))
+                        new_inp["nested_lineage"] = known["formula_lineage"]
+                        new_direct_inputs.append(new_inp)
+                        changed = True
+                    else:
+                        new_direct_inputs.append(inp)
+
+                if changed:
+                    lineage["direct_inputs"] = new_direct_inputs
+                    # Recompute ultimate_raw_sources and lineage_depth
+                    lineage["ultimate_raw_sources"] = formula_lineage_mod.collect_ultimate_sources(new_direct_inputs)
+                    lineage["lineage_depth"] = formula_lineage_mod.compute_lineage_depth(new_direct_inputs)
+                    # Rebuild fingerprint with updated sources
+                    lineage["fingerprint"] = formula_lineage_mod.build_fingerprint(
+                        lineage["computation_type"],
+                        lineage.get("computation_params", {}),
+                        lineage["ultimate_raw_sources"],
+                    )
+    # ─────────────────────────────────────────────────────────────────────
+
     for sheet_json in sheets_json:
         normalize_pivot_metadata_only(sheet_json)
         

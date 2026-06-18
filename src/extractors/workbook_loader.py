@@ -63,7 +63,7 @@ class SheetCacheWrapper:
         limit_rows = None
         if not cache_formatting:
             if ws.max_row is None or self.max_row > 200:
-                limit_rows = 100
+                limit_rows = 20
                 
         print(f"  [Cache] Loading sheet '{ws.title}' into memory array...")
         row_count = 0

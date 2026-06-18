@@ -32,7 +32,7 @@ def verify():
             print(f"  Table: {t_name}")
             
             # Check table-level fields
-            table_keys = ["business_purpose", "grain", "measures", "dimensions"]
+            table_keys = ["business_purpose", "measures", "dimensions"]
             missing_table_keys = [k for k in table_keys if k not in table]
             if missing_table_keys:
                 print(f"    [FAIL] Table is missing metadata keys: {missing_table_keys}")
@@ -40,7 +40,6 @@ def verify():
             else:
                 print(f"    [PASS] Table metadata keys present: {table_keys}")
                 print(f"      Business Purpose: {table.get('business_purpose')}")
-                print(f"      Grain: {table.get('grain')}")
                 print(f"      Measures: {table.get('measures')}")
                 print(f"      Dimensions: {table.get('dimensions')}")
 
