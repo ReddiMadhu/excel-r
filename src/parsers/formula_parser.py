@@ -134,10 +134,10 @@ def resolve_dependency_to_column(dep_ref, raw_column_maps):
     return None
 
 
-def parse_formula_with_library(xl_model, sheet_name, cell_ref, formula_str,
-                                current_row, ws_val, raw_column_maps, 
-                                table_col_mapping, table_name, ws_form=None,
-                                detected_tables=None):
+def _parse_formula_with_library_impl(xl_model, sheet_name, cell_ref, formula_str,
+                                     current_row, ws_val, raw_column_maps, 
+                                     table_col_mapping, table_name, ws_form=None,
+                                     detected_tables=None):
     """
     Parse a formula using the formulas library dependency graph.
     Falls back to custom parsing if the library can't resolve it.
@@ -261,23 +261,15 @@ def _generate_pattern_from_formula(formula_str, ws_val, current_row,
             pattern = pattern.replace(f"{sheet}!${col1}:${col2}", f"{sheet}[{header}]")
             pattern = pattern.replace(f"{sheet}!{col1}:{col2}", f"{sheet}[{header}]")
 
-    # Replace local cell references (e.g., $A6, B$6, A6)
-    cell_refs = re.findall(r'\$?([A-Z]+)\$?(\d+)', pattern)
-    for col_letter, row_str in set(cell_refs):
-        row_num = int(row_str)
-        col_idx = column_index_from_string(col_letter)
-        header = table_col_mapping.get(col_idx, f"Col_{col_letter}")
-        if row_num == current_row:
-            replacement = "current row"
-        else:
-            val = ws_val.cell(row=row_num, column=col_idx).value
-            if val is not None:
-                replacement = f"'{val}'"
-            else:
-                replacement = f"{col_letter}{row_str}"
+    # Replace cell references (with optional sheet names)
+    cell_refs = re.findall(r"(?:(?:'[^']+'|[A-Za-z0-9_\-]+)!)?\$?[A-Z]+\$?[0-9]+", pattern)
+    for ref in set(cell_refs):
+        repr_val, header, ref_sheet = translate_reference(
+            ref, current_row, ws_val, raw_column_maps, table_col_mapping, detected_tables=None
+        )
         pattern = re.sub(
-            rf'\$?{col_letter}\$?{row_str}\b',
-            replacement,
+            rf'(?<![A-Za-z0-9_]){re.escape(ref)}(?![A-Za-z0-9_])',
+            repr_val,
             pattern
         )
 
@@ -412,13 +404,36 @@ def translate_reference(ref_str, current_row, summary_ws_val, raw_column_maps, t
         header = col_map.get(col_letter, f"Col_{col_letter}")
         return f"{sheet_name}[{header}]", header, sheet_name
         
-    # If referencing the summary sheet or a local reference
-    is_summary = (not sheet_name) or ("summary" in sheet_name.lower()) or (sheet_name == current_sheet_title)
-    if is_summary and col_letter:
+    # Resolve the target worksheet dynamically
+    wb = summary_ws_val.parent if summary_ws_val else None
+    ref_ws = summary_ws_val
+    ref_sheet_title = current_sheet_title
+    is_valid_ref = False
+    
+    if not sheet_name:
+        is_valid_ref = True
+    elif wb and sheet_name in wb.sheetnames:
+        ref_ws = wb[sheet_name]
+        ref_sheet_title = sheet_name
+        is_valid_ref = True
+        
+    if is_valid_ref and col_letter:
         col_idx = column_index_from_string(col_letter)
         
-        # If we have detected_tables, try to map the cell to a specific table's column
-        if detected_tables and row_num:
+        # Get header name
+        header = f"Col_{col_letter}"
+        if ref_sheet_title == current_sheet_title:
+            header = table_col_mapping.get(col_idx, f"Col_{col_letter}")
+        elif ref_ws:
+            h_val = ref_ws.cell(row=2, column=col_idx).value
+            if not h_val:
+                h_val = ref_ws.cell(row=1, column=col_idx).value
+            if h_val:
+                header = str(h_val).strip()
+        
+        # If we have detected_tables and we are referencing the current sheet,
+        # try to map the cell to a specific table's column.
+        if ref_sheet_title == current_sheet_title and detected_tables and row_num:
             for tbl in detected_tables:
                 if tbl.get("row_start") and tbl.get("row_end") and tbl.get("col_start") and tbl.get("col_end"):
                     if tbl["row_start"] <= row_num <= tbl["row_end"] and tbl["col_start"] <= col_idx <= tbl["col_end"]:
@@ -426,33 +441,28 @@ def translate_reference(ref_str, current_row, summary_ws_val, raw_column_maps, t
                         headers = tbl.get("headers", [])
                         if col_offset < len(headers):
                             header_name = headers[col_offset]
-                            # Return descriptive TableName[ColumnName] pattern
                             return f"{tbl['table_name']}[{header_name}]", header_name, current_sheet_title
         
-        # Fallback to local table col mapping
-        # If it refers to the same row as the formula
-        if row_num == current_row:
-            header = table_col_mapping.get(col_idx, f"Col_{col_letter}")
+        # Fallback to local table col mapping on current sheet
+        # If it refers to the same row as the formula on the current sheet
+        if ref_sheet_title == current_sheet_title and row_num == current_row:
             return f"current {header}", header, current_sheet_title
             
-        # If it refers to a specific cell
-        if row_num:
-            val = summary_ws_val.cell(row=row_num, column=col_idx).value
-            header = table_col_mapping.get(col_idx, f"Col_{col_letter}")
+        # If it refers to a specific cell on the referenced sheet
+        if row_num and ref_ws:
+            val = ref_ws.cell(row=row_num, column=col_idx).value
             
             if isinstance(val, (int, float)):
                 val_str = str(val)
             else:
                 val_str = f"'{val}'" if val is not None else "None"
                 
-            return f"{current_sheet_title}!{col_letter}{row_num} ({val_str})", header, current_sheet_title
-            
-    return ref_str, None, None
+            return f"{ref_sheet_title}!{col_letter}{row_num} ({val_str})", header, ref_sheet_title
             
     return ref_str, None, None
 
 
-def parse_formula(formula_str, current_row, summary_ws_val, raw_column_maps, table_col_mapping, table_name, summary_ws_form=None, _depth=0, detected_tables=None):
+def _parse_formula_impl(formula_str, current_row, summary_ws_val, raw_column_maps, table_col_mapping, table_name, summary_ws_form=None, _depth=0, detected_tables=None):
     """
     Parse an Excel formula and extract metadata, lineage and formula patterns.
     
@@ -703,10 +713,10 @@ def parse_formula(formula_str, current_row, summary_ws_val, raw_column_maps, tab
         clean_pattern = formula_pattern.lstrip('=')
         
         # Translate any remaining cell references (like F7) in the clean pattern
-        cell_refs = re.findall(r'\b\$?[A-Z]+\$?[0-9]+\b', clean_pattern)
+        cell_refs = re.findall(r"(?:(?:'[^']+'|[A-Za-z0-9_\-]+)!)?\$?[A-Z]+\$?[0-9]+", clean_pattern)
         for ref in set(cell_refs):
             repr_val, header, ref_sheet = translate_reference(ref, current_row, summary_ws_val, raw_column_maps, table_col_mapping, detected_tables)
-            clean_pattern = re.sub(rf'\b{re.escape(ref)}\b', repr_val, clean_pattern)
+            clean_pattern = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(ref)}(?![A-Za-z0-9_])', repr_val, clean_pattern)
             if header:
                 if ref_sheet == current_sheet_title:
                     sum_data_source_columns.add(header)
@@ -743,10 +753,10 @@ def parse_formula(formula_str, current_row, summary_ws_val, raw_column_maps, tab
     # 4. Parse arithmetic formulas
     arith_pattern = formula_str.lstrip('=')
     
-    cell_refs = re.findall(r'\b\$?[A-Z]+\$?[0-9]+\b', arith_pattern)
+    cell_refs = re.findall(r"(?:(?:'[^']+'|[A-Za-z0-9_\-]+)!)?\$?[A-Z]+\$?[0-9]+", arith_pattern)
     for ref in set(cell_refs):
         repr_val, header, ref_sheet = translate_reference(ref, current_row, summary_ws_val, raw_column_maps, table_col_mapping, detected_tables)
-        arith_pattern = re.sub(rf'\b{re.escape(ref)}\b', repr_val, arith_pattern)
+        arith_pattern = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(ref)}(?![A-Za-z0-9_])', repr_val, arith_pattern)
         if header:
             formula_source_details.append({
                 "column_name": header,
@@ -824,3 +834,67 @@ def infer_formula_pattern_for_column(formulas_in_column):
         if f and str(f).startswith('='):
             return f
     return ""
+
+
+def calculate_formula_nesting_depth(formula_str):
+    """
+    Calculate the deepest nesting level of functions inside an Excel formula.
+    Constants or simple references return 0.
+    """
+    if not formula_str or not str(formula_str).startswith('='):
+        return 0
+        
+    formula = str(formula_str).lstrip('=').strip().upper()
+    
+    # Simple regex to find function calls like NAME(
+    func_pattern = re.compile(r'\b([A-Z][A-Z0-9_\.]+)\s*\(')
+    
+    def get_inner_depth(expr):
+        matches = list(func_pattern.finditer(expr))
+        if not matches:
+            return 0
+            
+        max_sub_depth = 0
+        for match in matches:
+            start_pos = match.end()
+            # Extract parenthesized block by matching parentheses
+            paren_count = 1
+            end_pos = start_pos
+            while paren_count > 0 and end_pos < len(expr):
+                if expr[end_pos] == '(':
+                    paren_count += 1
+                elif expr[end_pos] == ')':
+                    paren_count -= 1
+                end_pos += 1
+                
+            arg_expr = expr[start_pos:end_pos-1]
+            max_sub_depth = max(max_sub_depth, get_inner_depth(arg_expr))
+            
+        return 1 + max_sub_depth
+        
+    return get_inner_depth(formula)
+
+
+def parse_formula(formula_str, *args, **kwargs):
+    """
+    Wrapper for _parse_formula_impl to inject nesting_depth and function_chain.
+    """
+    res = _parse_formula_impl(formula_str, *args, **kwargs)
+    if isinstance(res, dict):
+        res["nesting_depth"] = calculate_formula_nesting_depth(formula_str)
+        formula_upper = str(formula_str).upper() if formula_str else ""
+        res["function_chain"] = list(dict.fromkeys(re.findall(r'\b([A-Z][A-Z0-9_\.]+)\s*\(', formula_upper)))
+    return res
+
+
+def parse_formula_with_library(xl_model, sheet_name, cell_ref, formula_str, *args, **kwargs):
+    """
+    Wrapper for _parse_formula_with_library_impl to inject nesting_depth and function_chain.
+    """
+    res = _parse_formula_with_library_impl(xl_model, sheet_name, cell_ref, formula_str, *args, **kwargs)
+    if isinstance(res, dict):
+        res["nesting_depth"] = calculate_formula_nesting_depth(formula_str)
+        formula_upper = str(formula_str).upper() if formula_str else ""
+        res["function_chain"] = list(dict.fromkeys(re.findall(r'\b([A-Z][A-Z0-9_\.]+)\s*\(', formula_upper)))
+    return res
+

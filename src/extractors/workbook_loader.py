@@ -35,7 +35,7 @@ class DummyCell:
         self.hyperlink = hyperlink
 
 class SheetCacheWrapper:
-    def __init__(self, ws):
+    def __init__(self, ws, cache_formatting=True):
         self._ws = ws
         self.title = ws.title
         self.min_row = ws.min_row or 1
@@ -44,13 +44,13 @@ class SheetCacheWrapper:
         self.max_column = ws.max_column or 1
         
         self._data = []
-        self._number_formats = []
-        self._fonts = []
-        self._borders = []
-        self._fills = []
-        self._alignments = []
-        self._comments = []
-        self._hyperlinks = []
+        self._number_formats = [] if cache_formatting else None
+        self._fonts = [] if cache_formatting else None
+        self._borders = [] if cache_formatting else None
+        self._fills = [] if cache_formatting else None
+        self._alignments = [] if cache_formatting else None
+        self._comments = [] if cache_formatting else None
+        self._hyperlinks = [] if cache_formatting else None
         
         class DummyMergedCells:
             ranges = []
@@ -60,18 +60,28 @@ class SheetCacheWrapper:
         self.column_dimensions = getattr(ws, "column_dimensions", {})
         self.data_validations = getattr(ws, "data_validations", None)
         
+        limit_rows = None
+        if not cache_formatting:
+            if ws.max_row is None or self.max_row > 200:
+                limit_rows = 100
+                
         print(f"  [Cache] Loading sheet '{ws.title}' into memory array...")
+        row_count = 0
         for row in ws.iter_rows():
             self._data.append([c.value for c in row])
-            self._number_formats.append([getattr(c, "number_format", "General") for c in row])
-            self._fonts.append([getattr(c, "font", None) for c in row])
-            self._borders.append([getattr(c, "border", None) for c in row])
-            self._fills.append([getattr(c, "fill", None) for c in row])
-            self._alignments.append([getattr(c, "alignment", None) for c in row])
-            self._comments.append([getattr(c, "comment", None) for c in row])
-            self._hyperlinks.append([getattr(c, "hyperlink", None) for c in row])
+            if cache_formatting:
+                self._number_formats.append([getattr(c, "number_format", "General") for c in row])
+                self._fonts.append([getattr(c, "font", None) for c in row])
+                self._borders.append([getattr(c, "border", None) for c in row])
+                self._fills.append([getattr(c, "fill", None) for c in row])
+                self._alignments.append([getattr(c, "alignment", None) for c in row])
+                self._comments.append([getattr(c, "comment", None) for c in row])
+                self._hyperlinks.append([getattr(c, "hyperlink", None) for c in row])
+            row_count += 1
+            if limit_rows and row_count >= limit_rows:
+                break
             
-        self.max_row = max(self.max_row, len(self._data))
+        self.max_row = ws.max_row or row_count
         if self._data:
             self.max_column = max(self.max_column, max(len(r) for r in self._data))
             
@@ -80,13 +90,13 @@ class SheetCacheWrapper:
         c_idx = column - 1
         if 0 <= r_idx < len(self._data) and 0 <= c_idx < len(self._data[r_idx]):
             val = self._data[r_idx][c_idx]
-            nf = self._number_formats[r_idx][c_idx]
-            font = self._fonts[r_idx][c_idx]
-            border = self._borders[r_idx][c_idx]
-            fill = self._fills[r_idx][c_idx]
-            align = self._alignments[r_idx][c_idx]
-            comment = self._comments[r_idx][c_idx]
-            hyperlink = self._hyperlinks[r_idx][c_idx]
+            nf = self._number_formats[r_idx][c_idx] if self._number_formats else "General"
+            font = self._fonts[r_idx][c_idx] if self._fonts else None
+            border = self._borders[r_idx][c_idx] if self._borders else None
+            fill = self._fills[r_idx][c_idx] if self._fills else None
+            align = self._alignments[r_idx][c_idx] if self._alignments else None
+            comment = self._comments[r_idx][c_idx] if self._comments else None
+            hyperlink = self._hyperlinks[r_idx][c_idx] if self._hyperlinks else None
         else:
             val = None
             nf = "General"
@@ -121,12 +131,21 @@ class SheetCacheWrapper:
         return getattr(self._ws, item)
 
 class WorkbookCacheWrapper:
-    def __init__(self, wb):
+    def __init__(self, wb, cache_formatting=True):
         self._wb = wb
         self._sheets = []
         self._sheet_dict = {}
         for ws in wb.worksheets:
-            cached_ws = SheetCacheWrapper(ws)
+            sheet_cache_fmt = cache_formatting
+            if cache_formatting:
+                name_lower = ws.title.lower()
+                raw_keywords = ["data", "raw", "extract", "dump", "source", "query", "sql"]
+                if any(kw in name_lower for kw in raw_keywords):
+                    sheet_cache_fmt = False
+                elif ws.max_row and ws.max_row > 500:
+                    sheet_cache_fmt = False
+                    
+            cached_ws = SheetCacheWrapper(ws, cache_formatting=sheet_cache_fmt)
             cached_ws.parent = self
             self._sheets.append(cached_ws)
             self._sheet_dict[ws.title] = cached_ws
@@ -149,13 +168,13 @@ class WorkbookCacheWrapper:
 def load_workbook_values(path):
     """Load workbook with data_only=True and read_only=True, then cache it."""
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    return WorkbookCacheWrapper(wb)
+    return WorkbookCacheWrapper(wb, cache_formatting=True)
 
 
 def load_workbook_formulas(path):
     """Load workbook with data_only=False and read_only=True, then cache it."""
     wb = openpyxl.load_workbook(path, data_only=False, read_only=True)
-    return WorkbookCacheWrapper(wb)
+    return WorkbookCacheWrapper(wb, cache_formatting=False)
 
 
 def get_sheet_used_range(ws):

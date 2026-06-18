@@ -115,7 +115,7 @@ def classify_table_rows(ws_val, ws_form, row_start, row_end, col_start, col_end)
     row_analyses = {}
     for r in range(row_start, row_end + 1):
         row_analyses[r] = formatting_extractor.analyze_row_formatting(
-            ws_val, r, col_start, col_end
+            ws_val, r, col_start, col_end, ws_form=ws_form
         )
     
     # 2. Identify total and check rows first (they have clear signals)
@@ -398,6 +398,7 @@ def extract_tables_from_sheet(ws_val, ws_form, pivot_tables_meta=None, wb=None):
             t_name = matching_pivot["pivot_table_name"]
             
             detected_tables.append({
+                "sheet_name": ws_val.title,
                 "table_name": t_name,
                 "table_type": "pivot_table",
                 "section_title": "Exhibit 5 Pivot Summary" if "GVUL" in t_name or "Exb" in t_name else t_name,
@@ -457,6 +458,7 @@ def extract_tables_from_sheet(ws_val, ws_form, pivot_tables_meta=None, wb=None):
             table_range = f"{get_column_letter(col_start)}{start_r}:{get_column_letter(col_end)}{end_r}"
             
             detected_tables.append({
+                "sheet_name": ws_val.title,
                 "table_name": table_name,
                 "table_type": table_type,
                 "section_title": section_title,

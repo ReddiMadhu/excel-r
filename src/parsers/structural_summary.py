@@ -93,7 +93,7 @@ def generate_workbook_skeleton(file_path, sheet_types, wb_val, wb_form, raw_colu
             sheet_info["tables"] = []
             
             # Find tables detected on this sheet
-            sheet_tables = [t for t in detected_tables if t.get("table_range") and ws_val.cell(row=t["row_start"], column=t["col_start"]).parent.title == s_name]
+            sheet_tables = [t for t in detected_tables if t.get("table_range") and (t.get("sheet_name") == s_name or ws_val.cell(row=t["row_start"], column=t["col_start"]).parent.title == s_name)]
             
             for tbl in sheet_tables:
                 t_name = tbl["table_name"]

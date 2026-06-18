@@ -78,10 +78,18 @@ def extract_cell_formatting(cell):
     return fmt
 
 
-def analyze_row_formatting(ws, row_idx, col_start=1, col_end=None):
+def analyze_row_formatting(ws, row_idx, col_start=1, col_end=None, ws_form=None):
     """
     Analyze formatting signals for an entire row.
     Returns a summary of what the row 'looks like' to a human.
+    
+    Args:
+        ws: worksheet loaded with data_only=True (for values and formatting)
+        row_idx: row index to analyze
+        col_start: first column to include
+        col_end: last column to include
+        ws_form: optional worksheet loaded with data_only=False (for raw formulas).
+                 Used to detect formula cells when cached values are missing.
     """
     if col_end is None:
         col_end = ws.max_column or 1
@@ -91,7 +99,19 @@ def analyze_row_formatting(ws, row_idx, col_start=1, col_end=None):
         cell = ws.cell(row=row_idx, column=c)
         cells.append(cell)
     
-    non_empty = [c for c in cells if c.value is not None]
+    # Count non-empty cells — include cells that are None in ws_val but have
+    # formulas in ws_form (uncached formula cells)
+    non_empty = []
+    formula_only_cols = set()  # columns with formula but no cached value
+    for c_idx, c in enumerate(cells):
+        if c.value is not None:
+            non_empty.append(c)
+        elif ws_form:
+            form_val = ws_form.cell(row=row_idx, column=col_start + c_idx).value
+            if form_val is not None and str(form_val).startswith('='):
+                non_empty.append(c)
+                formula_only_cols.add(col_start + c_idx)
+    
     if not non_empty:
         return {
             "is_blank": True,
@@ -125,15 +145,33 @@ def analyze_row_formatting(ws, row_idx, col_start=1, col_end=None):
     )
     
     # Content analysis
-    first_val = str(non_empty[0].value).strip().lower() if non_empty else ""
+    first_val = str(non_empty[0].value).strip().lower() if non_empty and non_empty[0].value is not None else ""
     has_numeric = any(isinstance(c.value, (int, float)) for c in non_empty)
+    
+    # Formula detection: check both ws_val and ws_form
     has_formula = any(
         c.value is not None and str(c.value).startswith('=') 
         for c in cells
     )
+    if not has_formula and ws_form:
+        # Fallback: check formula-mode workbook for uncached formulas
+        for c_idx in range(col_start, col_end + 1):
+            form_val = ws_form.cell(row=row_idx, column=c_idx).value
+            if form_val is not None and str(form_val).startswith('='):
+                has_formula = True
+                break
     
     # Classification
     is_header = (bold_ratio > 0.5 and has_bottom_border and not has_numeric)
+    
+    # Enhanced header detection: if no formatting signals, detect by content.
+    # A row is a header if it has multiple text values and NO formulas/numerics.
+    if not is_header and not has_numeric and not has_formula:
+        text_cells = [c for c in non_empty if c.value is not None and isinstance(c.value, str) and not str(c.value).startswith('=')]
+        if len(text_cells) >= 2 and len(text_cells) == len(non_empty):
+            # All non-empty cells are text strings — likely a header row
+            is_header = True
+    
     is_total = (
         ("total" in first_val or "grand total" in first_val)
         and (bold_ratio > 0.3 or has_bottom_border or has_top_border)

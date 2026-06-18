@@ -32,7 +32,7 @@ def process_single_file(file_path, output_dir):
     wb_form = workbook_loader.load_workbook_formulas(file_path)
     
     # 3. Classify sheets
-    sheet_types = sheet_classifier.classify_all_sheets(wb_val)
+    sheet_types = sheet_classifier.classify_all_sheets(wb_val, wb_form=wb_form)
     
     # Identify summary and raw sheet names
     summary_sheet_name = None
@@ -47,6 +47,7 @@ def process_single_file(file_path, output_dir):
         raise ValueError(f"No summary/report sheet could be detected in {file_name}.")
         
     # 4. Parse headers & columns mapping for all sheets
+    from openpyxl.utils import get_column_letter
     raw_column_maps = {}
     for sheet_name in wb_val.sheetnames:
         ws = wb_val[sheet_name]
@@ -56,14 +57,13 @@ def process_single_file(file_path, output_dir):
                 header_row = raw_data_parser.detect_header_row(ws)
             except Exception:
                 pass
-            try:
-                col_meta = raw_data_parser.get_column_samples_and_types(ws, header_row)
-                mapping = {}
-                for h, meta in col_meta.items():
-                    mapping[meta["excel_column"]] = h
-                raw_column_maps[sheet_name] = mapping
-            except Exception as e:
-                print(f"Warning: Failed parsing column map for sheet {sheet_name}: {e}")
+            mapping = {}
+            for col_idx in range(1, ws.max_column + 1):
+                val = ws.cell(row=header_row, column=col_idx).value
+                if val is not None:
+                    col_letter = get_column_letter(col_idx)
+                    mapping[col_letter] = str(val).strip()
+            raw_column_maps[sheet_name] = mapping
         
     # 5. Extract pivot tables from ZIP XML files
     pivots_meta = []
@@ -75,15 +75,21 @@ def process_single_file(file_path, output_dir):
     # Compile formulas library workbook model (disabled to prevent out-of-memory and slow execution)
     xl_model = None
         
-    # 6. Extract summary tables
-    summary_ws_val = wb_val[summary_sheet_name]
-    summary_ws_form = wb_form[summary_sheet_name]
-    detected_tables = summary_table_detector.extract_tables_from_sheet(
-        summary_ws_val, 
-        summary_ws_form, 
-        pivots_meta,
-        wb_val
-    )
+    # 6. Extract summary tables for all summary_report sheets
+    detected_tables_by_sheet = {}
+    for name, s_type in sheet_types.items():
+        if s_type == "summary_report":
+            ws_v = wb_val[name]
+            ws_f = wb_form[name]
+            tables = summary_table_detector.extract_tables_from_sheet(
+                ws_v, ws_f, pivots_meta, wb_val
+            )
+            detected_tables_by_sheet[name] = tables
+    
+    # For backward compat: flatten to a single list (used by build_workbook_json)
+    detected_tables = []
+    for tables in detected_tables_by_sheet.values():
+        detected_tables.extend(tables)
     
     # 7. Build final JSON structure
     output_json = json_builder.build_workbook_json(

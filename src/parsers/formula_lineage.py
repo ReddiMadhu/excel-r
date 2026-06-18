@@ -65,10 +65,15 @@ def extract_filter_value(crit_val_ref, crit_val_repr, summary_ws_val=None):
     if summary_ws_val:
         try:
             parse_fn, _ = _get_parse_fn()
-            _, col_letter, row_num, _ = parse_fn(ref)
+            sheet_name, col_letter, row_num, _ = parse_fn(ref)
             if row_num and col_letter:
                 col_idx = column_index_from_string(col_letter)
-                val = summary_ws_val.cell(row=row_num, column=col_idx).value
+                ws = summary_ws_val
+                if sheet_name and summary_ws_val.parent:
+                    wb = summary_ws_val.parent
+                    if sheet_name in wb.sheetnames:
+                        ws = wb[sheet_name]
+                val = ws.cell(row=row_num, column=col_idx).value
                 if val is not None:
                     return f"'{val}'" if isinstance(val, str) else str(val)
         except Exception:

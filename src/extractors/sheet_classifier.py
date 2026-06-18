@@ -8,9 +8,16 @@ Works regardless of what the sheet is named.
 import src.extractors.formatting_extractor as formatting_extractor
 
 
-def classify_sheet(sheet_name, ws, all_sheets_info):
+def classify_sheet(sheet_name, ws, all_sheets_info, ws_form=None):
     """
-    Classify a sheet based on content analysis, with name as secondary signal.
+    Classify a sheet based on name heuristics as primary and content analysis as secondary.
+    
+    Args:
+        sheet_name: name of the sheet
+        ws: worksheet loaded with data_only=True
+        all_sheets_info: list of dicts with basic info about all sheets
+        ws_form: optional worksheet loaded with data_only=False (for detecting
+                 formulas when cached values are missing)
     
     Returns: 'summary_report', 'raw_data', 'helper', or 'unknown'.
     """
@@ -20,23 +27,24 @@ def classify_sheet(sheet_name, ws, all_sheets_info):
     if max_row == 0 or max_col == 0:
         return "empty"
     
-    # 1. Content-based analysis (primary)
-    content_type = _classify_by_content(ws, max_row, max_col)
-    if content_type != "unknown":
-        return content_type
-    
-    # 2. Name-based heuristics (fallback)
+    # 1. Name-based heuristics (primary if sheet has a clear descriptive name)
     name_type = _classify_by_name(sheet_name, max_row, max_col, all_sheets_info)
     if name_type != "unknown":
         return name_type
+        
+    # 2. Content-based analysis (secondary for generic sheet names like Sheet1)
+    content_type = _classify_by_content(ws, max_row, max_col, ws_form=ws_form)
+    if content_type != "unknown":
+        return content_type
     
     # 3. Relative size comparison (last resort)
     return _classify_by_relative_size(sheet_name, max_row, all_sheets_info)
 
 
-def _classify_by_content(ws, max_row, max_col):
+def _classify_by_content(ws, max_row, max_col, ws_form=None):
     """
     Classify based on what the sheet actually contains.
+    Uses ws_form (formula-mode workbook) to detect uncached formulas.
     """
     # Sample the first N rows to gather statistics
     sample_rows = min(max_row, 100)
@@ -63,6 +71,12 @@ def _classify_by_content(ws, max_row, max_col):
                 
                 if cell.font and cell.font.bold:
                     bold_count += 1
+            elif ws_form:
+                # Check formula-mode workbook for uncached formula cells
+                form_cell = ws_form.cell(row=r, column=c)
+                if form_cell.value and str(form_cell.value).startswith('='):
+                    formula_count += 1
+                    total_cells += 1
     
     if total_cells == 0:
         return "empty"
@@ -81,8 +95,17 @@ def _classify_by_content(ws, max_row, max_col):
     if max_row > 200 and max_col > 5 and formula_ratio < 0.1 and numeric_ratio > 0.25:
         return "raw_data"
     
+    # RAW DATA: Small tabular data (10-500 rows) with many columns and high numeric ratio
+    if max_row > 10 and max_col > 5 and formula_ratio < 0.02 and numeric_ratio > 0.4:
+        return "raw_data"
+    
     # SUMMARY/REPORT: Has formulas and bold formatting (structured report)
     if formula_ratio > 0.1 and bold_ratio > 0.03:
+        return "summary_report"
+    
+    # SUMMARY: Has formulas but no bold/borders (ETL-generated or unopened files)
+    # This catches formula-heavy sheets where cached values are missing
+    if formula_ratio > 0.15 and max_row > 5:
         return "summary_report"
     
     # SUMMARY (pivot-based): No formulas but structured with bold sections
@@ -90,8 +113,8 @@ def _classify_by_content(ws, max_row, max_col):
     if bold_ratio > 0.08 and 10 < max_row < 200 and numeric_ratio > 0.2:
         return "summary_report"
     
-    # HELPER: Very small sheet with mostly text
-    if max_row < 50 and max_col < 10 and text_ratio > 0.5:
+    # HELPER: Very small sheet with mostly text and NO formulas
+    if max_row < 50 and max_col < 10 and text_ratio > 0.5 and formula_ratio == 0:
         return "helper"
     
     return "unknown"
@@ -118,7 +141,7 @@ def _classify_by_name(sheet_name, max_row, max_col, all_sheets_info):
         "policy_data", "claims_data",
     ]
     if name_lower in raw_keywords or any(kw in name_lower for kw in raw_keywords):
-        if max_row > 50:  # Must have substantial data
+        if max_row > 10:  # Lowered from 50 — small reference/lookup tables are still raw data
             return "raw_data"
     
     # Helper indicators
@@ -144,7 +167,7 @@ def _classify_by_relative_size(sheet_name, max_row, all_sheets_info):
     max_other_rows = max(s['max_row'] for s in all_sheets_info)
     
     # If this sheet has the most rows and is large, it's likely raw data
-    if max_row == max_other_rows and max_row > 100:
+    if max_row == max_other_rows and max_row > 10:
         return "raw_data"
     
     # If this sheet is tiny, it's a helper
@@ -154,10 +177,15 @@ def _classify_by_relative_size(sheet_name, max_row, all_sheets_info):
     return "unknown"
 
 
-def classify_all_sheets(wb):
+def classify_all_sheets(wb, wb_form=None):
     """
     Classify all sheets in a workbook and return a dict mapping sheet name to type.
     Uses content-based analysis as primary, name-based as fallback.
+    
+    Args:
+        wb: workbook loaded with data_only=True
+        wb_form: optional workbook loaded with data_only=False (for detecting
+                 formulas when cached values are missing)
     """
     # First pass: gather basic info
     all_sheets_info = []
@@ -173,10 +201,12 @@ def classify_all_sheets(wb):
     classifications = {}
     for sheet_info in all_sheets_info:
         ws = wb[sheet_info['name']]
+        ws_form = wb_form[sheet_info['name']] if wb_form and sheet_info['name'] in wb_form.sheetnames else None
         classifications[sheet_info['name']] = classify_sheet(
             sheet_info['name'],
             ws,
             all_sheets_info,
+            ws_form=ws_form,
         )
     
     # Post-processing: ensure we have at least one summary and one raw data

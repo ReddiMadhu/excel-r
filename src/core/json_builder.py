@@ -177,6 +177,70 @@ def normalize_pivot_metadata_only(sheet_json):
         sheet_json["pivot_tables"] = []
 
 
+def generate_column_business_definition(col_info, row_header_cols):
+    """
+    Generate a concise plain-language business definition for a column
+    based on its type, formula patterns, and direct inputs.
+    """
+    c_type = col_info.get("type", "raw")
+    c_name = col_info.get("column_name", "")
+    f_pattern = col_info.get("formula_pattern", "")
+    ds_sheet = col_info.get("data_source_sheet", "")
+    ds_cols = col_info.get("data_source_columns", [])
+    
+    if c_type == "label":
+        return f"Dimension label identifying the row taxonomy for {c_name}."
+    elif c_type == "total":
+        return f"Total summary aggregate calculation for {c_name}."
+    elif c_type == "check":
+        return f"Validation check mapping quality or variance for {c_name}."
+    elif c_type == "pivot_value":
+        if ds_sheet and ds_cols:
+            return f"Pivot Table summary aggregation of {', '.join(ds_cols)} from {ds_sheet} grouped by row dimensions."
+        return f"Pivot Table summary aggregation of values grouped by row dimensions."
+        
+    if c_type == "formula_based":
+        if f_pattern:
+            if "SUMIFS" in f_pattern or "SUM" in f_pattern:
+                if ds_sheet and ds_cols:
+                    return f"Aggregated sum of {', '.join(ds_cols)} from {ds_sheet} grouped by {', '.join(row_header_cols) if row_header_cols else 'row dimensions'}."
+                return f"Aggregated sum of values grouped by {', '.join(row_header_cols) if row_header_cols else 'row dimensions'}."
+            elif "COUNTIFS" in f_pattern or "COUNT" in f_pattern:
+                if ds_sheet:
+                    return f"Aggregated count of records from {ds_sheet} matching row criteria."
+                return f"Aggregated count of records matching row criteria."
+            elif "/" in f_pattern:
+                return f"Calculated ratio based on logic: {f_pattern}."
+            elif "+" in f_pattern or "-" in f_pattern or "*" in f_pattern:
+                return f"Calculated value based on logic: {f_pattern}."
+        if ds_sheet and ds_cols:
+            return f"Calculated formula column referencing {', '.join(ds_cols)} from {ds_sheet}."
+            
+    return f"Raw source value or input column for {c_name}."
+
+
+def generate_table_business_definition(t_name, columns, row_headers):
+    """
+    Formulate a business definition and table metadata summary.
+    """
+    measures = [c["column_name"] for c in columns if c["type"] in ("formula_based", "pivot_value", "total", "check")]
+    dimensions = [c["column_name"] for c in columns if c["type"] == "label"]
+    
+    grain = f"One row per {', '.join(row_headers)}" if row_headers else "Flat list of values"
+    
+    purpose = f"Summary report showing {', '.join(measures[:3])}" if measures else "Data table"
+    if row_headers:
+        purpose += f" grouped by {', '.join(row_headers)}"
+    purpose += "."
+    
+    return {
+        "business_purpose": purpose,
+        "grain": grain,
+        "measures": measures,
+        "dimensions": dimensions
+    }
+
+
 def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_form, 
                         raw_column_maps, pivot_tables_meta, detected_tables, xl_model=None):
     """
@@ -300,7 +364,18 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 })
                 
             if not filters_list:
+                # Collect table boundaries to avoid treating headers as filters
+                table_occupied_rows = set()
+                for t in detected_tables:
+                    rc = t.get("row_classification", {})
+                    for key in ("header_rows", "title_rows", "data_rows", "total_rows", "check_rows"):
+                        for row_num in rc.get(key, []):
+                            table_occupied_rows.add(row_num)
+                
                 for r in range(1, 5):
+                    # Skip rows that belong to detected tables
+                    if r in table_occupied_rows:
+                        continue
                     cell_a = ws_val.cell(row=r, column=1).value
                     cell_b = ws_val.cell(row=r, column=2).value
                     if cell_a is not None and cell_b is not None:
@@ -332,7 +407,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
         # Determine tables for this sheet
         sheet_tables = []
         if s_type == "summary_report":
-            sheet_tables = [t for t in detected_tables if t.get("table_range")]
+            sheet_tables = [t for t in detected_tables if t.get("table_range") and (t.get("sheet_name") == s_name or not t.get("sheet_name"))]
         else:
             sheet_tables = summary_table_detector.extract_tables_from_sheet(
                 ws_val, ws_form, pivot_tables_meta=None, wb=wb_val
@@ -514,6 +589,9 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                             ws_form,
                             detected_tables=sheet_tables
                         )
+                
+                depth = parsed_f.get("nesting_depth", 0)
+                f_chain = parsed_f.get("function_chain", [])
                     
                 # Samples & Data Type detection (limit scan for efficiency)
                 sample_vals = []
@@ -590,7 +668,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                         
                     for g_field in p_details["group_by_fields"]:
                         formula_parts.append(f"{source_sheet}!{g_field}")
-                        formula_parts.append(f"Summary!{g_field}")
+                        formula_parts.append(f"{s_name}!{g_field}")
                         
                     for f_field, f_val in p_details["pivot_filters"].items():
                         if f_val and f_val != "(All)":
@@ -599,6 +677,10 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                             
                     first_formula = f"={formula_name}({', '.join(formula_parts)})"
                     f_count = 1
+                    
+                    depth = formula_parser.calculate_formula_nesting_depth(first_formula)
+                    formula_upper = str(first_formula).upper()
+                    f_chain = list(dict.fromkeys(re.findall(r'\b([A-Z][A-Z0-9_\.]+)\s*\(', formula_upper)))
                     
                 # Generate definitions
                 definition = ""
@@ -644,6 +726,8 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                     "number_format": number_format,
                     "number_format_type": formatting_extractor.get_number_format_type(number_format),
                     "sample_values": sample_vals[:3],
+                    "nesting_depth": depth,
+                    "function_chain": f_chain,
                     # Temporary fields for lineage Pass 2 (will be stripped later)
                     "formula_source_details": fs_details,
                     "data_source_sheet": ds_sheet,
@@ -655,23 +739,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 if col_sem:
                     col_info["definition"] = col_sem
                 else:
-                    # Fallback to local heuristic definitions
-                    if col_type == "label":
-                        col_info["definition"] = f"Row hierarchy label: {col_name}"
-                    elif col_type == "pivot_value" and col_name in pivot_measures:
-                        p_details = pivot_measures[col_name]
-                        col_info["definition"] = f"{p_details['aggregation']} of {p_details['source_column']} grouped by {', '.join(p_details['group_by_fields'])}"
-                    elif col_type == "formula_based":
-                        if ds_sheet and ds_cols:
-                            col_info["definition"] = f"Sum of {', '.join(ds_cols)} from {ds_sheet} grouped by {', '.join(row_header_cols)}"
-                        else:
-                            col_info["definition"] = f"Derived formula column: {f_pattern}"
-                    elif col_type == "total":
-                        col_info["definition"] = f"Total sum of values for {col_name}"
-                    elif col_type == "check":
-                        col_info["definition"] = f"Check validation variance for {col_name}"
-                    else:
-                        col_info["definition"] = f"Raw summary value for {col_name}"
+                    col_info["definition"] = generate_column_business_definition(col_info, row_header_cols)
                 
                 columns_json.append(col_info)
             
@@ -718,63 +786,10 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 col_info.pop("data_source_sheet", None)
                 col_info.pop("data_source_columns", None)
             
-            # Populate rows JSON with forward-filled labels only if summary sheet
-            rows_json = []
-            if s_type == "summary_report":
-                last_label_vals = {col: None for col in row_header_cols}
-                
-                # Get hierarchy info if available
-                hierarchy = tbl.get("hierarchy", [])
-                hierarchy_by_row = {h["row"]: h for h in hierarchy} if hierarchy else {}
-                
-                all_table_rows = title_rows + header_rows + data_rows + total_rows + check_rows
-                all_table_rows.sort()
-                
-                for r in all_table_rows:
-                    row_type = "data"
-                    if r in title_rows:
-                        row_type = "title"
-                    elif r in header_rows:
-                        row_type = "header"
-                    elif r in total_rows:
-                        row_type = "total"
-                    elif r in check_rows:
-                        row_type = "check"
-                        
-                    values_dict = {}
-                    for c_idx, col_name in enumerate(headers, col_start):
-                        val = ws_val.cell(row=r, column=c_idx).value
-                        if isinstance(val, (datetime.datetime, datetime.date)):
-                            values_dict[col_name] = val.isoformat()
-                        else:
-                            values_dict[col_name] = val
-                            
-                    # Forward-fill row labels
-                    row_label_vals = {}
-                    if row_type == "data":
-                        for col_name in row_header_cols:
-                            orig_val = values_dict.get(col_name)
-                            if orig_val is not None and str(orig_val).strip() != "":
-                                last_label_vals[col_name] = orig_val
-                            row_label_vals[col_name] = last_label_vals[col_name]
-                    else:
-                        first_cell = ws_val.cell(row=r, column=col_start).value
-                        row_label_vals = {row_header_cols[0]: first_cell} if row_header_cols else {}
-                    
-                    # Add hierarchy path if available
-                    hierarchy_path = ""
-                    if r in hierarchy_by_row:
-                        hierarchy_path = hierarchy_by_row[r].get("full_path", "")
-                        
-                    row_entry = {
-                        "excel_row": r,
-                        "row_label_values": row_label_vals,
-                        "values": values_dict,
-                        "row_type": row_type,
-                    }
-                    if hierarchy_path:
-                        row_entry["hierarchy_path"] = hierarchy_path
-                    rows_json.append(row_entry)
+            # Row-level serialization removed: for large tables (e.g. pivot tables
+            # with 20K+ rows), emitting every row value would bloat the JSON output.
+            # Column-level metadata (formulas, lineage, fingerprints) is sufficient
+            # for rationalization and decommission analysis.
 
             # Detect input cells (manual vs formula-driven)
             input_cells = formatting_extractor.detect_input_cells(
@@ -783,6 +798,8 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 data_rows[-1] if data_rows else row_end,
                 col_start, col_end
             )
+            
+            table_sem_info = generate_table_business_definition(t_name, columns_json, row_header_cols)
             
             table_entry = {
                 "table_name": t_name,
@@ -799,10 +816,13 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 "row_count": len(data_rows),
                 "column_count": len(headers),
                 "input_cell_count": len(input_cells),
-                "definition": t_sem.get("definition") or f"Summary table for {t_name}",
+                "definition": t_sem.get("definition") or table_sem_info["business_purpose"],
+                "business_purpose": t_sem.get("definition") or table_sem_info["business_purpose"],
+                "grain": table_sem_info["grain"],
+                "measures": table_sem_info["measures"],
+                "dimensions": table_sem_info["dimensions"],
                 "inter_table_relationships": t_sem.get("inter_table_relationships", []),
                 "columns": columns_json,
-                "rows": rows_json,
             }
             
             # Add hierarchy summary if detected
