@@ -133,7 +133,7 @@ def classify_table_rows(ws_val, ws_form, row_start, row_end, col_start, col_end)
             continue
         
         # Total rows — detected by formatting (bold) + content ("total")
-        if analysis["is_total"]:
+        if analysis["is_total"] and not analysis["is_section_title"]:
             total_rows.append(r)
             continue
         
@@ -152,7 +152,7 @@ def classify_table_rows(ws_val, ws_form, row_start, row_end, col_start, col_end)
             continue
         
         # Check if content says "total" even without bold
-        if "total" in first_val or "grand total" in first_val:
+        if ("total" in first_val or "grand total" in first_val) and not analysis["is_section_title"]:
             total_rows.append(r)
             continue
     
