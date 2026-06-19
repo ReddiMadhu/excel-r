@@ -898,3 +898,144 @@ def parse_formula_with_library(xl_model, sheet_name, cell_ref, formula_str, *arg
         res["function_chain"] = list(dict.fromkeys(re.findall(r'\b([A-Z][A-Z0-9_\.]+)\s*\(', formula_upper)))
     return res
 
+
+def classify_summary_formula(formula_str, row_num, row_type, data_rows,
+                              ws_val, ws_form, raw_column_maps,
+                              table_col_mapping, table_name, col_idx,
+                              detected_tables=None):
+    """
+    Classify a formula found in a total or check row and build lightweight lineage.
+
+    Returns a dict with:
+      - computation_type: SUM | SUMIFS | ARITHMETIC | VALIDATION | UNKNOWN
+      - scope: column_total | filtered_total | cross_table_check | intra_table_check | arithmetic
+      - references_data_rows: list of row numbers referenced (if applicable)
+      - validates_against: source sheet/table name (for check rows)
+      - validates_total_row: row number of the total row being checked (for check rows)
+    """
+    if not formula_str or not str(formula_str).startswith('='):
+        return None
+
+    formula_upper = formula_str.upper()
+    current_sheet = ws_val.title if ws_val else "Summary"
+    lineage = {}
+
+    # ── Detect SUM of data rows (column_total) ──────────────────────
+    sum_calls = extract_function_calls(formula_str, "SUM")
+    sumifs_calls = extract_function_calls(formula_str, "SUMIFS")
+
+    if sumifs_calls:
+        # SUMIFS in a total/check row → filtered total or cross-table check
+        args = sumifs_calls[0]["args"]
+        sum_ref = args[0] if args else ""
+        sheet_name, _, _, _ = parse_sheet_cell_ref(sum_ref)
+
+        if row_type == "check":
+            lineage["computation_type"] = "SUMIFS"
+            lineage["scope"] = "cross_table_check"
+            if sheet_name and sheet_name != current_sheet:
+                lineage["validates_against"] = sheet_name
+        else:
+            lineage["computation_type"] = "SUMIFS"
+            lineage["scope"] = "filtered_total"
+            if sheet_name:
+                lineage["source_sheet"] = sheet_name
+
+    elif sum_calls:
+        # Plain SUM — check if it references data rows in the same column
+        args = sum_calls[0]["args"]
+        referenced_rows = []
+        references_external = False
+        external_sheet = None
+
+        for arg in args:
+            if ':' in arg:
+                parts = arg.split(':')
+                sheet1, col1, row1, _ = parse_sheet_cell_ref(parts[0])
+                _, col2, row2, _ = parse_sheet_cell_ref(parts[1])
+                if sheet1 and sheet1 != current_sheet:
+                    references_external = True
+                    external_sheet = sheet1
+                elif row1 and row2:
+                    referenced_rows.extend(range(row1, row2 + 1))
+            else:
+                sheet_ref, _, row_ref, _ = parse_sheet_cell_ref(arg)
+                if sheet_ref and sheet_ref != current_sheet:
+                    references_external = True
+                    external_sheet = sheet_ref
+                elif row_ref:
+                    referenced_rows.append(row_ref)
+
+        # Check if the formula also contains arithmetic with external refs
+        # e.g. =SUM(SQL_data!D:D)-B8
+        remaining = formula_str
+        for call in sum_calls:
+            remaining = remaining.replace(call["full_call"], "")
+        has_external_in_arithmetic = False
+        ext_refs = re.findall(r"(?:'[^']+'|[A-Za-z0-9_\-]+)!\$?[A-Z]+", remaining)
+        for ext_ref in ext_refs:
+            ref_sheet = ext_ref.split('!')[0].strip("'")
+            if ref_sheet != current_sheet:
+                has_external_in_arithmetic = True
+                external_sheet = ref_sheet
+
+        if row_type == "check" and (references_external or has_external_in_arithmetic):
+            lineage["computation_type"] = "VALIDATION"
+            lineage["scope"] = "cross_table_check"
+            if external_sheet:
+                lineage["validates_against"] = external_sheet
+            # Try to find total row reference in the formula
+            cell_refs_in_formula = re.findall(r'\$?([A-Z]+)\$?(\d+)', formula_str)
+            for _, rn in cell_refs_in_formula:
+                rn_int = int(rn)
+                if rn_int in (data_rows[-1] + 1 if data_rows else 0,) or rn_int == row_num - 1:
+                    lineage["validates_total_row"] = rn_int
+                    break
+        elif row_type == "check" and not references_external:
+            lineage["computation_type"] = "VALIDATION"
+            lineage["scope"] = "intra_table_check"
+            if referenced_rows:
+                lineage["references_data_rows"] = [r for r in referenced_rows if r in data_rows]
+        else:
+            # Total row with SUM
+            lineage["computation_type"] = "SUM"
+            lineage["scope"] = "column_total"
+            data_row_refs = [r for r in referenced_rows if r in data_rows]
+            if data_row_refs:
+                lineage["references_data_rows"] = data_row_refs
+
+    else:
+        # No SUM/SUMIFS — arithmetic formula
+        # Check for external sheet references
+        ext_refs = re.findall(r"(?:'[^']+'|[A-Za-z0-9_\-]+)!\$?[A-Z]+", formula_str)
+        has_external = False
+        external_sheet = None
+        for ext_ref in ext_refs:
+            ref_sheet = ext_ref.split('!')[0].strip("'")
+            if ref_sheet != current_sheet:
+                has_external = True
+                external_sheet = ref_sheet
+
+        # Extract all cell references to find data row refs
+        cell_refs_in_formula = re.findall(r'\$?([A-Z]+)\$?(\d+)', formula_str)
+        referenced_rows = []
+        for _, rn in cell_refs_in_formula:
+            referenced_rows.append(int(rn))
+
+        if row_type == "check":
+            if has_external:
+                lineage["computation_type"] = "VALIDATION"
+                lineage["scope"] = "cross_table_check"
+                lineage["validates_against"] = external_sheet
+            else:
+                lineage["computation_type"] = "VALIDATION"
+                lineage["scope"] = "intra_table_check"
+        else:
+            lineage["computation_type"] = "ARITHMETIC"
+            lineage["scope"] = "column_total"
+            data_row_refs = [r for r in referenced_rows if r in data_rows]
+            if data_row_refs:
+                lineage["references_data_rows"] = data_row_refs
+
+    return lineage if lineage else None
+

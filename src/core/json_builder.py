@@ -248,6 +248,87 @@ def generate_table_business_definition(t_name, columns, row_headers):
     }
 
 
+def extract_summary_row_cells(ws_val, ws_form, rows, row_type, headers,
+                               col_start, col_end, data_rows, table_name,
+                               raw_column_maps, table_col_mapping,
+                               detected_tables=None):
+    """
+    Extract cell-level detail for total and check rows.
+
+    For each row in `rows`, reads every cell across the table's column range
+    and extracts value, formula, human-readable formula_pattern, and a
+    lightweight lineage classification.
+
+    Args:
+        ws_val: worksheet with cached values (data_only=True)
+        ws_form: worksheet with raw formulas (data_only=False)
+        rows: list of row numbers to extract (total_rows or check_rows)
+        row_type: 'total' or 'check'
+        headers: list of column header names for this table
+        col_start, col_end: column range of the table
+        data_rows: list of data row numbers in the table
+        table_name: name of the containing table
+        raw_column_maps: {sheet_name: {col_letter: header_name}} for raw data sheets
+        table_col_mapping: {col_index: header_name} for the current table
+        detected_tables: list of all detected table dicts on this sheet
+
+    Returns:
+        list of summary row dicts, each with row_number, row_type, label, and cells.
+    """
+    result = []
+    for r in rows:
+        # Extract the label (first non-empty cell in the row, typically column A)
+        label_val = ws_val.cell(row=r, column=col_start).value
+        label = str(label_val).strip() if label_val is not None else row_type.capitalize()
+
+        cells = []
+        for c_idx in range(col_start, col_end + 1):
+            col_offset = c_idx - col_start
+            col_name = headers[col_offset] if col_offset < len(headers) else f"Column_{get_column_letter(c_idx)}"
+
+            value = ws_val.cell(row=r, column=c_idx).value
+            formula_raw = ws_form.cell(row=r, column=c_idx).value
+            formula = str(formula_raw) if formula_raw is not None and str(formula_raw).startswith('=') else None
+
+            cell_info = {
+                "column_name": col_name,
+                "value": value if not isinstance(value, (bytes, type(None))) else value,
+            }
+
+            if formula:
+                cell_info["formula"] = formula
+
+                # Generate a human-readable pattern
+                parsed = formula_parser.parse_formula(
+                    formula, r, ws_val, raw_column_maps,
+                    table_col_mapping, table_name, ws_form,
+                    detected_tables=detected_tables
+                )
+                pattern = parsed.get("formula_pattern", "")
+                if pattern:
+                    cell_info["formula_pattern"] = pattern
+
+                # Build lightweight lineage classification
+                lineage = formula_parser.classify_summary_formula(
+                    formula, r, row_type, data_rows,
+                    ws_val, ws_form, raw_column_maps,
+                    table_col_mapping, table_name, c_idx,
+                    detected_tables=detected_tables
+                )
+                if lineage:
+                    cell_info["formula_lineage"] = lineage
+
+            cells.append(cell_info)
+
+        result.append({
+            "row_number": r,
+            "row_type": row_type,
+            "label": label,
+            "cells": cells,
+        })
+    return result
+
+
 def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_form, 
                         raw_column_maps, pivot_tables_meta, detected_tables, xl_model=None):
     """
@@ -819,6 +900,30 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 "inter_table_relationships": t_sem.get("inter_table_relationships", []),
                 "columns": columns_json,
             }
+            
+            # Extract cell-level data for total and check rows
+            if total_rows or check_rows:
+                summary_rows = []
+                if total_rows:
+                    summary_rows.extend(
+                        extract_summary_row_cells(
+                            ws_val, ws_form, total_rows, "total", headers,
+                            col_start, col_end, data_rows, t_name,
+                            raw_column_maps, table_col_mapping,
+                            detected_tables=sheet_tables
+                        )
+                    )
+                if check_rows:
+                    summary_rows.extend(
+                        extract_summary_row_cells(
+                            ws_val, ws_form, check_rows, "check", headers,
+                            col_start, col_end, data_rows, t_name,
+                            raw_column_maps, table_col_mapping,
+                            detected_tables=sheet_tables
+                        )
+                    )
+                if summary_rows:
+                    table_entry["summary_rows"] = summary_rows
             
             # Add hierarchy summary if detected
             hierarchy = tbl.get("hierarchy", [])
