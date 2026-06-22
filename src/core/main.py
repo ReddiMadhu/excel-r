@@ -12,6 +12,7 @@ import src.parsers.summary_table_detector as summary_table_detector
 import src.core.json_builder as json_builder
 import src.utils.validation as validation
 import src.parsers.formula_parser as formula_parser
+from src.utils.timing_log import PipelineTimer
 
 try:
     from dotenv import load_dotenv
@@ -23,17 +24,21 @@ def process_single_file(file_path, output_dir):
     """Process a single Excel workbook and output its JSON."""
     file_name = os.path.basename(file_path)
     print(f"Processing workbook: {file_name}")
-    
-    # 1. Compute MD5 hash
-    file_hash = workbook_loader.compute_md5(file_path)
-    
-    # 2. Load workbooks
-    wb_val = workbook_loader.load_workbook_values(file_path)
-    wb_form = workbook_loader.load_workbook_formulas(file_path)
-    
-    # 3. Classify sheets
-    sheet_types = sheet_classifier.classify_all_sheets(wb_val, wb_form=wb_form)
-    
+
+    timer = PipelineTimer("parse_workbook", file_name=file_name)
+
+    with timer.step("md5_hash"):
+        file_hash = workbook_loader.compute_md5(file_path)
+
+    with timer.step("load_workbook_values"):
+        wb_val = workbook_loader.load_workbook_values(file_path)
+
+    with timer.step("load_workbook_formulas"):
+        wb_form = workbook_loader.load_workbook_formulas(file_path)
+
+    with timer.step("classify_sheets"):
+        sheet_types = sheet_classifier.classify_all_sheets(wb_val, wb_form=wb_form)
+
     # Identify summary and raw sheet names
     summary_sheet_name = None
     raw_sheet_name = None
@@ -42,78 +47,90 @@ def process_single_file(file_path, output_dir):
             summary_sheet_name = name
         elif s_type == "raw_data":
             raw_sheet_name = name
-            
+
     if not summary_sheet_name:
+        timer.finish("PARSE_TOTAL_ERROR")
         raise ValueError(f"No summary/report sheet could be detected in {file_name}.")
-        
-    # 4. Parse headers & columns mapping for all sheets
-    from openpyxl.utils import get_column_letter
-    raw_column_maps = {}
-    for sheet_name in wb_val.sheetnames:
-        ws = wb_val[sheet_name]
-        if ws.max_row > 0 and ws.max_column > 0:
-            header_row = 1
-            try:
-                header_row = raw_data_parser.detect_header_row(ws)
-            except Exception:
-                pass
-            mapping = {}
-            for col_idx in range(1, ws.max_column + 1):
-                val = ws.cell(row=header_row, column=col_idx).value
-                if val is not None:
-                    col_letter = get_column_letter(col_idx)
-                    mapping[col_letter] = str(val).strip()
-            raw_column_maps[sheet_name] = mapping
-        
-    # 5. Extract pivot tables from ZIP XML files
-    pivots_meta = []
-    try:
-        pivots_meta = pivot_parser.parse_pivot_metadata(file_path)
-    except Exception as e:
-        print(f"Warning extracting zip XML pivots for {file_name}: {e}")
-        
-    # Compile formulas library workbook model (disabled to prevent out-of-memory and slow execution)
-    xl_model = None
-        
-    # 6. Extract summary tables for all summary_report sheets
-    detected_tables_by_sheet = {}
-    for name, s_type in sheet_types.items():
-        if s_type == "summary_report":
-            ws_v = wb_val[name]
-            ws_f = wb_form[name]
-            tables = summary_table_detector.extract_tables_from_sheet(
-                ws_v, ws_f, pivots_meta, wb_val
-            )
-            detected_tables_by_sheet[name] = tables
-    
-    # For backward compat: flatten to a single list (used by build_workbook_json)
+
+    with timer.step("parse_column_headers"):
+        from openpyxl.utils import get_column_letter
+        raw_column_maps = {}
+        for sheet_name in wb_val.sheetnames:
+            ws = wb_val[sheet_name]
+            if ws.max_row > 0 and ws.max_column > 0:
+                header_row = 1
+                try:
+                    header_row = raw_data_parser.detect_header_row(ws)
+                except Exception:
+                    pass
+                mapping = {}
+                for col_idx in range(1, ws.max_column + 1):
+                    val = ws.cell(row=header_row, column=col_idx).value
+                    if val is not None:
+                        col_letter = get_column_letter(col_idx)
+                        mapping[col_letter] = str(val).strip()
+                raw_column_maps[sheet_name] = mapping
+
+    with timer.step("parse_pivot_metadata"):
+        pivots_meta = []
+        try:
+            pivots_meta = pivot_parser.parse_pivot_metadata(file_path)
+        except Exception as e:
+            print(f"Warning extracting zip XML pivots for {file_name}: {e}")
+
+    with timer.step("extract_summary_tables"):
+        detected_tables_by_sheet = {}
+        for name, s_type in sheet_types.items():
+            if s_type == "summary_report":
+                ws_v = wb_val[name]
+                ws_f = wb_form[name]
+                tables = summary_table_detector.extract_tables_from_sheet(
+                    ws_v, ws_f, pivots_meta, wb_val
+                )
+                detected_tables_by_sheet[name] = tables
+
     detected_tables = []
     for tables in detected_tables_by_sheet.values():
         detected_tables.extend(tables)
-    
-    # 7. Build final JSON structure
-    output_json = json_builder.build_workbook_json(
-        file_path, 
-        file_hash, 
-        sheet_types, 
-        wb_val, 
-        wb_form, 
-        raw_column_maps, 
-        pivots_meta, 
-        detected_tables,
-        xl_model
-    )
-    
-    # 8. Validate output and add warnings
-    warnings = validation.validate_extracted_json(output_json)
-    output_json["extraction_warnings"] = warnings
-    
-    # 9. Save JSON to output folder
-    base_name = os.path.splitext(file_name)[0]
-    out_path = os.path.join(output_dir, f"{base_name}.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(output_json, f, indent=4)
-        
+
+    with timer.step("formulas_library_compile"):
+        xl_model = None
+        try:
+            max_cells = int(os.getenv("FORMULAS_LIB_MAX_CELLS", "5000"))
+            if max_cells > 0:
+                xl_model = formula_parser.compile_workbook_scoped(
+                    file_path,
+                    sheet_types=sheet_types,
+                    detected_tables=detected_tables,
+                    max_cells=max_cells,
+                )
+        except Exception as e:
+            print(f"Warning: formulas library budget compile failed for {file_name}: {e}")
+
+    with timer.step("build_workbook_json"):
+        output_json = json_builder.build_workbook_json(
+            file_path,
+            file_hash,
+            sheet_types,
+            wb_val,
+            wb_form,
+            raw_column_maps,
+            pivots_meta,
+            detected_tables,
+            xl_model
+        )
+
+    with timer.step("validate_and_save_json"):
+        warnings = validation.validate_extracted_json(output_json)
+        output_json["extraction_warnings"] = warnings
+        output_json["comparison_readiness"] = validation.compute_comparison_readiness(output_json)
+
+        base_name = os.path.splitext(file_name)[0]
+        out_path = os.path.join(output_dir, f"{base_name}.json")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(output_json, f, indent=4)
+
+    timer.finish("PARSE_TOTAL")
     print(f"Saved JSON: {out_path} (Warnings count: {len(warnings)})")
     return warnings
 

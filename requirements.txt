@@ -14,3 +14,11 @@ networkx>=3.0
 scikit-learn>=1.2.0
 oletools>=0.60
 
+# FastAPI Server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Rationalization
+rapidfuzz>=3.0.0
+

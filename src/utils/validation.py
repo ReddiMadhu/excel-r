@@ -6,6 +6,71 @@ Added generic structural checks and formula resolution quality checks.
 """
 import os
 
+_COMPARABLE_TYPES = frozenset({"formula_based", "pivot_value", "total", "check"})
+_FULL_TYPES = frozenset({"SUMIFS", "COUNTIFS", "SUM_RANGE", "ARITHMETIC", "PASS_THROUGH", "MULTI_AGG", "RATIO", "CONSTANT"})
+
+
+def compute_comparison_readiness(json_data):
+    """
+    Compute per-workbook comparison readiness metrics.
+
+    Returns dict with:
+      extraction_quality_score (0-1): share of comparable columns with fingerprint + sources
+      comparison_mode: full | degraded | insufficient
+      comparable_columns, ready_columns, degraded_columns, missing_columns
+    """
+    sheets = json_data.get("sheets", [])
+    comparable = 0
+    ready = 0
+    degraded = 0
+    missing = 0
+
+    for sheet in sheets:
+        if sheet.get("sheet_type") not in ("summary_report",):
+            continue
+        for table in sheet.get("tables", []):
+            for col in table.get("columns", []):
+                col_type = col.get("type", "")
+                if col_type not in _COMPARABLE_TYPES:
+                    continue
+                comparable += 1
+                lineage = col.get("formula_lineage") or {}
+                fingerprint = lineage.get("fingerprint", "") if isinstance(lineage, dict) else ""
+                sources = lineage.get("ultimate_raw_sources", []) if isinstance(lineage, dict) else []
+                comp_type = lineage.get("computation_type", "") if isinstance(lineage, dict) else ""
+
+                has_fp = bool(fingerprint)
+                has_sources = bool(sources)
+
+                if has_fp and has_sources and comp_type in _FULL_TYPES:
+                    ready += 1
+                elif has_fp:
+                    degraded += 1
+                else:
+                    missing += 1
+
+    if comparable == 0:
+        score = 0.0
+        mode = "insufficient"
+    else:
+        score = round((ready + degraded * 0.5) / comparable, 4)
+        full_ratio = ready / comparable
+        if full_ratio >= 0.8:
+            mode = "full"
+        elif score >= 0.4:
+            mode = "degraded"
+        else:
+            mode = "insufficient"
+
+    return {
+        "extraction_quality_score": score,
+        "comparison_mode": mode,
+        "comparable_columns": comparable,
+        "ready_columns": ready,
+        "degraded_columns": degraded,
+        "missing_columns": missing,
+    }
+
 
 def validate_extracted_json(json_data):
     """
@@ -90,7 +155,15 @@ def validate_extracted_json(json_data):
                         f"({formula_based_count - unresolved_count}/{formula_based_count}). "
                         f"Library resolved: {library_resolved_count}, Custom resolved: {custom_resolved_count}."
                     )
-                    
+
+    readiness = compute_comparison_readiness(json_data)
+    if readiness["comparable_columns"] > 0 and readiness["extraction_quality_score"] < 0.6:
+        warnings.append(
+            f"Low comparison readiness: score={readiness['extraction_quality_score']:.0%}, "
+            f"mode={readiness['comparison_mode']}, "
+            f"missing={readiness['missing_columns']}/{readiness['comparable_columns']} columns."
+        )
+
     return warnings
 
 

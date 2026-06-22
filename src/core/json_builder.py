@@ -24,6 +24,8 @@ import src.parsers.structural_summary as structural_summary
 import src.parsers.summary_table_detector as summary_table_detector
 import src.utils.llm_client as llm_client
 import src.parsers.formula_lineage as formula_lineage_mod
+from src.utils.table_row_limit import limit_data_rows
+from src.utils.timing_log import log_step, timed_step
 
 
 HAS_GENAI_LIB = None
@@ -90,14 +92,22 @@ Your response must be a single raw JSON object matching the schema above. Do not
     try:
         print("  [LLM] Sending skeleton to LLM for semantic analysis...")
         import concurrent.futures
+        llm_start = time.perf_counter()
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(llm.invoke, prompt)
             try:
                 response = future.result(timeout=60)  # 60-second timeout
             except concurrent.futures.TimeoutError:
+                log_step("json_build", "llm_semantics", time.perf_counter() - llm_start, result="timeout")
                 print("  [LLM] WARNING: LLM call timed out after 60s — skipping semantic analysis.")
                 future.cancel()
                 return None
+        log_step(
+            "json_build",
+            "llm_semantics",
+            time.perf_counter() - llm_start,
+            skeleton_kb=f"{len(skeleton_str) // 1024}",
+        )
         print("  [LLM] Received LLM response, parsing...")
         response_text = llm_client.stringify_chat_content(response.content).strip()
         
@@ -352,13 +362,16 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             raw_data_sheet_name = s_name
 
     # Extract workbook-level metadata
-    wb_meta = workbook_loader.extract_workbook_metadata(wb_val, file_path=file_name)
+    with timed_step("json_build", "extract_workbook_metadata", file_name=os.path.basename(file_name)):
+        wb_meta = workbook_loader.extract_workbook_metadata(wb_val, file_path=file_name)
 
     # Build skeleton and analyze semantics via LLM
-    skeleton = structural_summary.generate_workbook_skeleton(
-        file_name, sheet_classifications, wb_val, wb_form, raw_column_maps, detected_tables
-    )
-    semantics = analyze_workbook_semantics_llm(skeleton)
+    with timed_step("json_build", "generate_workbook_skeleton", file_name=os.path.basename(file_name)):
+        skeleton = structural_summary.generate_workbook_skeleton(
+            file_name, sheet_classifications, wb_val, wb_form, raw_column_maps, detected_tables
+        )
+    with timed_step("json_build", "llm_semantics_wrapper", file_name=os.path.basename(file_name)):
+        semantics = analyze_workbook_semantics_llm(skeleton)
     
     workbook_purpose = ""
     process_flow = {}
@@ -382,7 +395,13 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 "columns": col_dict
             }
 
-    for s_name, s_type in sheet_classifications.items():
+    with timed_step(
+        "json_build",
+        "build_all_sheets_json",
+        file_name=os.path.basename(file_name),
+        sheet_count=len(sheet_classifications),
+    ):
+      for s_name, s_type in sheet_classifications.items():
             
         ws_val = wb_val[s_name]
         ws_form = wb_form[s_name]
@@ -563,6 +582,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             title_rows = row_classification["title_rows"]
             header_rows = row_classification["header_rows"]
             data_rows = row_classification["data_rows"]
+            active_data_rows = limit_data_rows(data_rows)
             total_rows = row_classification["total_rows"]
             check_rows = row_classification["check_rows"]
             
@@ -594,7 +614,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 val_start_col = col_start
                 for c in range(col_start, col_end + 1):
                     col_has_values = False
-                    for r in data_rows:
+                    for r in active_data_rows:
                         cell_val = ws_val.cell(row=r, column=c).value
                         cell_formula = ws_form.cell(row=r, column=c).value
                         if formula_parser.is_value_cell(cell_val, cell_formula):
@@ -627,15 +647,19 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             for c_idx, col_name in enumerate(headers, col_start):
                 col_letter = get_column_letter(c_idx)
                 
-                # Get formulas from data rows
+                # Get formulas from data rows (first N rows only for large tables)
                 if row_count > 1000:
-                    col_formulas = [col_formulas_cache[c_idx][r - 1] for r in data_rows]
+                    col_formulas = [col_formulas_cache[c_idx][r - 1] for r in active_data_rows]
                 else:
-                    col_formulas = [ws_form.cell(row=r, column=c_idx).value for r in data_rows]
-                formula_pattern_inferred = formula_parser.infer_formula_pattern_for_column(col_formulas)
-                
-                first_formula = next((f for f in col_formulas if f and str(f).startswith('=')), None)
-                first_formula_row = next((r for r, f in zip(data_rows, col_formulas) if f and str(f).startswith('=')), None)
+                    col_formulas = [ws_form.cell(row=r, column=c_idx).value for r in active_data_rows]
+                # Find all unique non-empty formulas and their row numbers
+                unique_formulas = []
+                seen_f = set()
+                for r, f in zip(active_data_rows, col_formulas):
+                    if f and str(f).startswith('='):
+                        if f not in seen_f:
+                            seen_f.add(f)
+                            unique_formulas.append((r, f))
                 
                 # Try formulas library first, then fall back to custom parser
                 parsed_f = {
@@ -648,25 +672,78 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                     "resolved_by": "none",
                 }
                 
-                if first_formula and first_formula_row:
-                    cell_ref = f"{col_letter}{first_formula_row}"
+                first_formula = None
+                if unique_formulas:
+                    first_row, first_formula = unique_formulas[0]
+                    cell_ref = f"{col_letter}{first_row}"
                     
                     if xl_model is not None:
-                        # Try formulas library first
                         parsed_f = formula_parser.parse_formula_with_library(
                             xl_model, s_name, cell_ref, first_formula,
-                            first_formula_row, ws_val, raw_column_maps,
+                            first_row, ws_val, raw_column_maps,
                             table_col_mapping, t_name, ws_form,
                             detected_tables=sheet_tables
                         )
                     else:
-                        # Direct custom parsing
                         parsed_f = formula_parser.parse_formula(
-                            first_formula, first_formula_row, ws_val,
+                            first_formula, first_row, ws_val,
                             raw_column_maps, table_col_mapping, t_name,
                             ws_form,
                             detected_tables=sheet_tables
                         )
+                    
+                    # Parse any additional unique formulas and merge them
+                    for f_row, f_str in unique_formulas[1:]:
+                        cell_ref_alt = f"{col_letter}{f_row}"
+                        if xl_model is not None:
+                            parsed_alt = formula_parser.parse_formula_with_library(
+                                xl_model, s_name, cell_ref_alt, f_str,
+                                f_row, ws_val, raw_column_maps,
+                                table_col_mapping, t_name, ws_form,
+                                detected_tables=sheet_tables
+                            )
+                        else:
+                            parsed_alt = formula_parser.parse_formula(
+                                f_str, f_row, ws_val,
+                                raw_column_maps, table_col_mapping, t_name,
+                                ws_form,
+                                detected_tables=sheet_tables
+                            )
+                        
+                        # Merge data source columns
+                        merged_cols = set(parsed_f.get("data_source_columns", []))
+                        merged_cols.update(parsed_alt.get("data_source_columns", []))
+                        parsed_f["data_source_columns"] = list(merged_cols)
+                        
+                        # Merge data source sheet (prefer non-empty and non-Summary)
+                        if parsed_alt.get("data_source_sheet") and parsed_alt["data_source_sheet"] != s_name:
+                            parsed_f["data_source_sheet"] = parsed_alt["data_source_sheet"]
+                            
+                        # Merge formula source details
+                        existing_details = parsed_f.get("formula_source_details", [])
+                        seen_details = {(d.get("column_name"), d.get("role")) for d in existing_details}
+                        for d in parsed_alt.get("formula_source_details", []):
+                            detail_key = (d.get("column_name"), d.get("role"))
+                            if detail_key not in seen_details:
+                                seen_details.add(detail_key)
+                                existing_details.append(d)
+                        parsed_f["formula_source_details"] = existing_details
+                        
+                        # Accumulate formula count
+                        parsed_f["formula_count"] = parsed_f.get("formula_count", 0) + parsed_alt.get("formula_count", 0)
+                        
+                        # Combine formula patterns (if distinct)
+                        if parsed_alt.get("formula_pattern") and parsed_alt["formula_pattern"] != parsed_f.get("formula_pattern"):
+                            parsed_f["formula_pattern"] = parsed_f["formula_pattern"] + " | " + parsed_alt["formula_pattern"]
+                        
+                        # Merge function chains
+                        if "function_chain" in parsed_f and "function_chain" in parsed_alt:
+                            merged_chain = list(dict.fromkeys(parsed_f["function_chain"] + parsed_alt["function_chain"]))
+                            parsed_f["function_chain"] = merged_chain
+                        
+                        # Merge nesting depths
+                        if "nesting_depth" in parsed_f and "nesting_depth" in parsed_alt:
+                            parsed_f["nesting_depth"] = max(parsed_f["nesting_depth"], parsed_alt["nesting_depth"])
                 
                 depth = parsed_f.get("nesting_depth", 0)
                 f_chain = parsed_f.get("function_chain", [])
@@ -676,7 +753,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 non_empty_for_dtype = []
                 scan_limit = 1000
                 checked_count = 0
-                for r in data_rows:
+                for r in active_data_rows:
                     if row_count > 1000:
                         v = col_values_cache[c_idx][r - 1]
                     else:
@@ -787,7 +864,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 
                 # Detect number format from data rows
                 number_format = "General"
-                for r in data_rows[:3]:
+                for r in active_data_rows[:3]:
                     nf = ws_val.cell(row=r, column=c_idx).number_format
                     if nf and nf != "General":
                         number_format = nf
@@ -872,8 +949,8 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             # Detect input cells (manual vs formula-driven)
             input_cells = formatting_extractor.detect_input_cells(
                 ws_val, ws_form, 
-                data_rows[0] if data_rows else row_start,
-                data_rows[-1] if data_rows else row_end,
+                active_data_rows[0] if active_data_rows else (data_rows[0] if data_rows else row_start),
+                active_data_rows[-1] if active_data_rows else (data_rows[-1] if data_rows else row_end),
                 col_start, col_end
             )
             
@@ -959,57 +1036,47 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             "tables": tables_json,
         })
         
-    # ── Cross-sheet lineage resolution pass ─────────────────────────────
-    # Build a workbook-wide column index from ALL sheets' tables' columns
-    # so that cross-sheet formula dependencies are correctly traced.
-    # e.g. Summary pivot SUMIFS(Synthetic_Data!GA Stat Reserve) should detect
-    #       that GA Stat Reserve on Synthetic_Data is itself formula_based.
-    global_col_index = {}
-    for sheet_json in sheets_json:
-        for table in sheet_json.get("tables", []):
-            for col in table.get("columns", []):
-                col_name = col.get("column_name", "")
-                if col_name:
-                    global_col_index[col_name] = col
+    with timed_step("json_build", "cross_sheet_lineage", file_name=os.path.basename(file_name)):
+        global_col_index = {}
+        for sheet_json in sheets_json:
+            for table in sheet_json.get("tables", []):
+                for col in table.get("columns", []):
+                    col_name = col.get("column_name", "")
+                    if col_name:
+                        global_col_index[col_name] = col
 
-    # Re-run lineage for every formula column using the global index
-    for sheet_json in sheets_json:
-        for table in sheet_json.get("tables", []):
-            for col_info in table.get("columns", []):
-                lineage = col_info.get("formula_lineage")
-                if not lineage:
-                    continue
-                # Re-resolve direct_inputs with global knowledge
-                new_direct_inputs = []
-                changed = False
-                for inp in lineage.get("direct_inputs", []):
-                    col_name = inp.get("column", "")
-                    known = global_col_index.get(col_name)
-                    was_raw = inp.get("is_raw", True)
-                    actually_raw = (known is None) or (known.get("type", "raw") == "raw")
-                    if was_raw and not actually_raw and known and "formula_lineage" in known:
-                        # This column was wrongly marked raw; it's actually computed
-                        new_inp = dict(inp)
-                        new_inp["is_raw"] = False
-                        new_inp["table"] = known.get("table_name", inp.get("table", ""))
-                        new_inp["nested_lineage"] = known["formula_lineage"]
-                        new_direct_inputs.append(new_inp)
-                        changed = True
-                    else:
-                        new_direct_inputs.append(inp)
+        for sheet_json in sheets_json:
+            for table in sheet_json.get("tables", []):
+                for col_info in table.get("columns", []):
+                    lineage = col_info.get("formula_lineage")
+                    if not lineage:
+                        continue
+                    new_direct_inputs = []
+                    changed = False
+                    for inp in lineage.get("direct_inputs", []):
+                        col_name = inp.get("column", "")
+                        known = global_col_index.get(col_name)
+                        was_raw = inp.get("is_raw", True)
+                        actually_raw = (known is None) or (known.get("type", "raw") == "raw")
+                        if was_raw and not actually_raw and known and "formula_lineage" in known:
+                            new_inp = dict(inp)
+                            new_inp["is_raw"] = False
+                            new_inp["table"] = known.get("table_name", inp.get("table", ""))
+                            new_inp["nested_lineage"] = known["formula_lineage"]
+                            new_direct_inputs.append(new_inp)
+                            changed = True
+                        else:
+                            new_direct_inputs.append(inp)
 
-                if changed:
-                    lineage["direct_inputs"] = new_direct_inputs
-                    # Recompute ultimate_raw_sources and lineage_depth
-                    lineage["ultimate_raw_sources"] = formula_lineage_mod.collect_ultimate_sources(new_direct_inputs)
-                    lineage["lineage_depth"] = formula_lineage_mod.compute_lineage_depth(new_direct_inputs)
-                    # Rebuild fingerprint with updated sources
-                    lineage["fingerprint"] = formula_lineage_mod.build_fingerprint(
-                        lineage["computation_type"],
-                        lineage.get("computation_params", {}),
-                        lineage["ultimate_raw_sources"],
-                    )
-    # ─────────────────────────────────────────────────────────────────────
+                    if changed:
+                        lineage["direct_inputs"] = new_direct_inputs
+                        lineage["ultimate_raw_sources"] = formula_lineage_mod.collect_ultimate_sources(new_direct_inputs)
+                        lineage["lineage_depth"] = formula_lineage_mod.compute_lineage_depth(new_direct_inputs)
+                        lineage["fingerprint"] = formula_lineage_mod.build_fingerprint(
+                            lineage["computation_type"],
+                            lineage.get("computation_params", {}),
+                            lineage["ultimate_raw_sources"],
+                        )
 
     for sheet_json in sheets_json:
         normalize_pivot_metadata_only(sheet_json)

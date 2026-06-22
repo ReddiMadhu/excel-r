@@ -7,11 +7,20 @@ supporting all 500+ Excel functions automatically.
 Fallback: If `formulas` fails on a specific cell, falls back to the existing custom
 parsing logic for SUMIFS, COUNTIFS, SUM, and arithmetic formulas.
 """
+import os
 import re
+import time
 import traceback
 import openpyxl
 from openpyxl.utils import get_column_letter, column_index_from_string
+from typing import Any, Dict, List, Optional, Set
 
+from src.utils.table_row_limit import (
+    TABLE_DATA_ROW_LIMIT,
+    collect_compile_range_refs,
+    count_formulas_in_scoped_tables,
+)
+from src.utils.timing_log import log_step
 
 # ─────────────────────────────────────────────────────────────────
 # formulas library integration
@@ -20,13 +29,233 @@ from openpyxl.utils import get_column_letter, column_index_from_string
 _node_lookup = None
 
 
+def _count_formulas_in_sheets(file_path: str, sheet_names: Set[str]) -> int:
+    """Count formula cells limited to the given sheet names."""
+    if not sheet_names:
+        return 0
+    count = 0
+    wb = openpyxl.load_workbook(file_path, data_only=False, read_only=True)
+    try:
+        for ws in wb.worksheets:
+            if ws.title not in sheet_names:
+                continue
+            for row in ws.iter_rows():
+                for cell in row:
+                    if cell.value and str(cell.value).startswith("="):
+                        count += 1
+    finally:
+        wb.close()
+    return count
+
+
+def _summary_sheet_names(sheet_types: Optional[Dict[str, str]]) -> Set[str]:
+    if not sheet_types:
+        return set()
+    return {name for name, stype in sheet_types.items() if stype == "summary_report"}
+
+
+def _compile_full_summary_sheets(
+    file_path: str,
+    summary_sheets: Set[str],
+    scoped_count: int,
+) -> Any:
+    """Legacy path: push entire summary sheets (FORMULAS_LIB_USE_TABLE_RANGES=full)."""
+    t0 = time.perf_counter()
+    try:
+        import formulas
+
+        model = formulas.ExcelModel()
+        book, context = model.add_book(file_path)
+        for ws in book.worksheets:
+            if ws.title in summary_sheets:
+                model.push(ws, context)
+        model.finish(complete=False, assemble=True)
+        elapsed = time.perf_counter() - t0
+        log_step(
+            "formulas_compile",
+            "scoped_summary_sheets",
+            elapsed,
+            sheets=",".join(sorted(summary_sheets)),
+            scoped_formulas=scoped_count,
+            table_ranges=False,
+            data_row_limit=TABLE_DATA_ROW_LIMIT,
+            compile_mode="full_summary_push",
+        )
+        print(
+            f"  [formulas] Full summary push: {len(summary_sheets)} sheet(s), "
+            f"{scoped_count} formula(s) in scope"
+        )
+        return model
+    except Exception as e:
+        print(f"Warning: full summary formulas compile failed: {e}")
+        traceback.print_exc()
+        return None
+
+
+def compile_workbook_scoped(
+    file_path: str,
+    sheet_types: Optional[Dict[str, str]] = None,
+    detected_tables: Optional[List[Dict[str, Any]]] = None,
+    max_cells: int = 5000,
+) -> Any:
+    """
+    Compile a reduced dependency graph — summary/report sheets only by default.
+
+    Cross-sheet references (e.g. SUMIFS on SQL_data) are registered on summary
+    formulas; raw data sheets are not fully compiled unless lazily expanded.
+
+    Set FORMULAS_LIB_SCOPE=full to restore whole-workbook compile.
+    Set FORMULAS_LIB_USE_TABLE_RANGES=full to compile whole summary sheets.
+    Table compile ranges include at most TABLE_DATA_ROW_LIMIT (default 10) data rows.
+    Set max_cells=0 to disable.
+    """
+    if max_cells <= 0:
+        return None
+
+    scope = os.getenv("FORMULAS_LIB_SCOPE", "scoped").strip().lower()
+    if scope == "full":
+        return compile_workbook_with_budget(file_path, max_cells=max_cells)
+
+    summary_sheets = _summary_sheet_names(sheet_types)
+    if not summary_sheets:
+        print("Warning: no summary_report sheets — falling back to full formulas compile")
+        return compile_workbook_with_budget(file_path, max_cells=max_cells)
+
+    use_full_sheet = os.getenv("FORMULAS_LIB_USE_TABLE_RANGES", "").strip().lower() in (
+        "0", "false", "no", "full",
+    )
+    if use_full_sheet:
+        scoped_count = _count_formulas_in_sheets(file_path, summary_sheets)
+        if scoped_count > max_cells:
+            print(
+                f"Warning: scoped formulas library skipped — "
+                f"{scoped_count} summary formulas exceeds budget {max_cells}"
+            )
+            return None
+        return _compile_full_summary_sheets(file_path, summary_sheets, scoped_count)
+
+    tables = detected_tables or []
+    scoped_count = count_formulas_in_scoped_tables(file_path, tables, summary_sheets)
+    if scoped_count == 0:
+        log_step(
+            "formulas_compile",
+            "scoped_summary_sheets",
+            0.0,
+            sheets=",".join(sorted(summary_sheets)),
+            scoped_formulas=0,
+            table_ranges=False,
+            data_row_limit=TABLE_DATA_ROW_LIMIT,
+            compile_skipped="no_formulas",
+        )
+        print("  [formulas] Skipped compile — no formulas in scoped table ranges")
+        return None
+
+    if scoped_count > max_cells:
+        print(
+            f"Warning: scoped formulas library skipped — "
+            f"{scoped_count} scoped formulas exceeds budget {max_cells}"
+        )
+        return None
+
+    range_refs = collect_compile_range_refs(file_path, tables, summary_sheets)
+    if not range_refs:
+        log_step(
+            "formulas_compile",
+            "scoped_summary_sheets",
+            0.0,
+            sheets=",".join(sorted(summary_sheets)),
+            scoped_formulas=scoped_count,
+            table_ranges=False,
+            data_row_limit=TABLE_DATA_ROW_LIMIT,
+            compile_skipped="no_table_ranges",
+        )
+        print("  [formulas] Skipped compile — no table ranges for summary sheets")
+        return None
+
+    t0 = time.perf_counter()
+    try:
+        import formulas
+
+        model = formulas.ExcelModel()
+        model.from_ranges(*range_refs)
+        model.finish(complete=False, assemble=True)
+        elapsed = time.perf_counter() - t0
+        sample_ref = range_refs[0]
+        if len(sample_ref) > 80:
+            sample_ref = sample_ref[:77] + "..."
+        log_step(
+            "formulas_compile",
+            "scoped_summary_sheets",
+            elapsed,
+            sheets=",".join(sorted(summary_sheets)),
+            scoped_formulas=scoped_count,
+            table_ranges=True,
+            data_row_limit=TABLE_DATA_ROW_LIMIT,
+            range_ref_count=len(range_refs),
+            range_refs_sample=sample_ref,
+        )
+        print(
+            f"  [formulas] Scoped compile: {len(summary_sheets)} summary sheet(s), "
+            f"{scoped_count} formula(s), {len(range_refs)} range(s), "
+            f"{TABLE_DATA_ROW_LIMIT} data rows max"
+        )
+        return model
+    except Exception as e:
+        elapsed = time.perf_counter() - t0
+        print(f"Warning: table-range compile failed: {e}")
+        traceback.print_exc()
+        log_step(
+            "formulas_compile",
+            "scoped_summary_sheets",
+            elapsed,
+            sheets=",".join(sorted(summary_sheets)),
+            scoped_formulas=scoped_count,
+            table_ranges=False,
+            data_row_limit=TABLE_DATA_ROW_LIMIT,
+            compile_skipped="from_ranges_failed",
+            range_ref_count=len(range_refs),
+        )
+        return None
+
+
 def compile_workbook(file_path):
     """
     Compile an entire workbook using the `formulas` library.
     Returns the ExcelModel or None if compilation fails.
     """
+    return compile_workbook_with_budget(file_path)
+
+
+def compile_workbook_with_budget(file_path, max_cells=5000):
+    """
+    Compile workbook with formulas library, respecting a cell/formula budget.
+
+    Skips compilation if the workbook exceeds max_cells estimated formulas
+    to avoid OOM. Set max_cells=0 to disable entirely.
+    """
+    if max_cells <= 0:
+        return None
     try:
         import formulas
+        import openpyxl
+
+        # Quick estimate: count formula cells before full compile
+        formula_count = 0
+        wb = openpyxl.load_workbook(file_path, data_only=False, read_only=True)
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                for cell in row:
+                    if cell.value and str(cell.value).startswith("="):
+                        formula_count += 1
+                        if formula_count > max_cells:
+                            wb.close()
+                            print(
+                                f"Warning: formulas library skipped — "
+                                f"{formula_count} formulas exceeds budget {max_cells}"
+                            )
+                            return None
+        wb.close()
+
         xl_model = formulas.ExcelModel().loads(file_path).finish()
         return xl_model
     except Exception as e:
@@ -668,28 +897,37 @@ def _parse_formula_impl(formula_str, current_row, summary_ws_val, raw_column_map
                                 if not sum_data_source_sheet or sum_data_source_sheet == current_sheet_title:
                                     sum_data_source_sheet = current_sheet_title
                         
-                        # Transitive resolution: resolve only the first row in range for efficiency
-                        if summary_ws_form and _depth < 5 and start_row_num and (not sheet_name or sheet_name == current_sheet_title):
-                            sum_r = start_row_num
-                            for c_idx in range(start_idx, end_idx + 1):
-                                ref_formula = summary_ws_form.cell(row=sum_r, column=c_idx).value
-                                if ref_formula and str(ref_formula).startswith('='):
-                                    parsed_ref = parse_formula(
-                                        ref_formula, sum_r, summary_ws_val,
-                                        raw_column_maps, table_col_mapping, table_name,
-                                        summary_ws_form, _depth=_depth + 1,
-                                        detected_tables=detected_tables
-                                    )
-                                    if parsed_ref["data_source_columns"]:
-                                        if parsed_ref["data_source_sheet"] and parsed_ref["data_source_sheet"] != current_sheet_title:
-                                            if sum_data_source_sheet == current_sheet_title:
-                                                sum_data_source_columns = set()
-                                            sum_data_source_sheet = parsed_ref["data_source_sheet"]
-                                            sum_data_source_columns.update(parsed_ref["data_source_columns"])
-                                        else:
-                                            if not sum_data_source_sheet or sum_data_source_sheet == current_sheet_title:
-                                                sum_data_source_sheet = current_sheet_title
+                        # Transitive resolution: resolve cells in the range up to a safe limit (50)
+                        if summary_ws_form and _depth < 5 and start_row_num and end_row_num and (not sheet_name or sheet_name == current_sheet_title):
+                            cells_processed = 0
+                            limit = 50
+                            break_outer = False
+                            for r_idx in range(start_row_num, end_row_num + 1):
+                                if break_outer:
+                                    break
+                                for c_idx in range(start_idx, end_idx + 1):
+                                    cells_processed += 1
+                                    if cells_processed > limit:
+                                        break_outer = True
+                                        break
+                                    ref_formula = summary_ws_form.cell(row=r_idx, column=c_idx).value
+                                    if ref_formula and str(ref_formula).startswith('='):
+                                        parsed_ref = parse_formula(
+                                            ref_formula, r_idx, summary_ws_val,
+                                            raw_column_maps, table_col_mapping, table_name,
+                                            summary_ws_form, _depth=_depth + 1,
+                                            detected_tables=detected_tables
+                                        )
+                                        if parsed_ref["data_source_columns"]:
+                                            if parsed_ref["data_source_sheet"] and parsed_ref["data_source_sheet"] != current_sheet_title:
+                                                if sum_data_source_sheet == current_sheet_title:
+                                                    sum_data_source_columns = set()
+                                                sum_data_source_sheet = parsed_ref["data_source_sheet"]
                                                 sum_data_source_columns.update(parsed_ref["data_source_columns"])
+                                            else:
+                                                if not sum_data_source_sheet or sum_data_source_sheet == current_sheet_title:
+                                                    sum_data_source_sheet = current_sheet_title
+                                                    sum_data_source_columns.update(parsed_ref["data_source_columns"])
                 else:
                     repr_val, header, ref_sheet = translate_reference(arg, current_row, summary_ws_val, raw_column_maps, table_col_mapping, detected_tables)
                     arg_reprs.append(repr_val)

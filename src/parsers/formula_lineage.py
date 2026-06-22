@@ -154,6 +154,8 @@ def detect_computation_type(formula_str):
         pass
     if "VLOOKUP(" in fu or "HLOOKUP(" in fu or ("INDEX(" in fu and "MATCH(" in fu):
         return "LOOKUP"
+    if "INDIRECT(" in fu or "OFFSET(" in fu:
+        return "DYNAMIC"
     sumifs_count = fu.count("SUMIFS(")
     if sumifs_count > 1:
         return "MULTI_AGG"
@@ -237,7 +239,35 @@ def _nfp(s):
     return re.sub(r'[\s\-/]+', '_', str(s).lower().strip()).strip('_')
 
 
-def build_fingerprint(computation_type, computation_params, ultimate_raw_sources):
+def build_degraded_fingerprint(
+    computation_type,
+    computation_params,
+    ultimate_raw_sources,
+    function_chain=None,
+    formula_str=None,
+):
+    """Build a coarse fingerprint when full lineage is unavailable."""
+    parts = [computation_type or "UNKNOWN"]
+    chain = function_chain or []
+    if not chain and formula_str:
+        chain = re.findall(r'\b([A-Z][A-Z0-9_\.]+)\s*\(', str(formula_str).upper())
+    if chain:
+        parts.append("FUNC_CHAIN:" + ",".join(sorted(set(c.lower() for c in chain))))
+    norm_sources = sorted([_nfp(s) for s in (ultimate_raw_sources or [])])
+    if norm_sources:
+        parts.append("USES:" + ",".join(norm_sources))
+    if computation_type == "DYNAMIC":
+        dynamic_func = "indirect" if formula_str and "INDIRECT(" in str(formula_str).upper() else "offset"
+        ref_count = len(re.findall(r'[A-Z]+\d+', str(formula_str or "")))
+        parts.append(f"FUNC:{dynamic_func}")
+        parts.append(f"REF_COUNT:{ref_count}")
+    elif computation_type == "LOOKUP":
+        parts.append("LOOKUP_TYPE:generic")
+    return "|".join(parts) if len(parts) > 1 else parts[0]
+
+
+def build_fingerprint(computation_type, computation_params, ultimate_raw_sources,
+                      function_chain=None, formula_str=None):
     """
     Build a normalized, comparable fingerprint string.
     Two formulas doing the same business logic produce identical fingerprints.
@@ -275,7 +305,26 @@ def build_fingerprint(computation_type, computation_params, ultimate_raw_sources
         parts.append(f"REF:{_nfp(computation_params.get('points_to_column', ''))}")
     elif computation_type == "CONSTANT":
         parts.append(f"VALUE:{computation_params.get('value', '')}")
-    return "|".join(parts)
+    elif computation_type == "SUM_RANGE":
+        sum_col = _nfp(computation_params.get("sum_column") or "")
+        if sum_col:
+            parts.append(f"SUM:{sum_col}")
+    elif computation_type == "RATIO":
+        norm_sources = sorted([_nfp(s) for s in ultimate_raw_sources])
+        parts.append("USES:" + ",".join(norm_sources))
+    elif computation_type in ("LOOKUP", "UNKNOWN", "DYNAMIC", "CONDITIONAL"):
+        return build_degraded_fingerprint(
+            computation_type, computation_params, ultimate_raw_sources,
+            function_chain=function_chain, formula_str=formula_str,
+        )
+
+    result = "|".join(parts)
+    if result == computation_type or len(parts) <= 1:
+        return build_degraded_fingerprint(
+            computation_type, computation_params, ultimate_raw_sources,
+            function_chain=function_chain, formula_str=formula_str,
+        )
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -384,7 +433,20 @@ def build_formula_lineage(parsed_result, formula_str, all_column_index):
 
     # ── 6. Depth + fingerprint ───────────────────────────────────
     depth = compute_lineage_depth(direct_inputs)
-    fingerprint = build_fingerprint(computation_type, computation_params, ultimate_raw_sources)
+    function_chain = parsed_result.get("function_chain", [])
+    fingerprint = build_fingerprint(
+        computation_type, computation_params, ultimate_raw_sources,
+        function_chain=function_chain, formula_str=formula_str,
+    )
+    if not fingerprint:
+        fingerprint = build_degraded_fingerprint(
+            computation_type, computation_params, ultimate_raw_sources,
+            function_chain=function_chain, formula_str=formula_str,
+        )
+
+    resolved_by = parsed_result.get("resolved_by", "custom_parser")
+    if computation_type in ("LOOKUP", "UNKNOWN", "DYNAMIC"):
+        resolved_by = "degraded"
 
     lineage = {
         "computation_type": computation_type,
@@ -393,6 +455,7 @@ def build_formula_lineage(parsed_result, formula_str, all_column_index):
         "direct_inputs": direct_inputs,
         "ultimate_raw_sources": ultimate_raw_sources,
         "fingerprint": fingerprint,
+        "resolved_by": resolved_by,
     }
     if wrapper_type:
         lineage["wrapper"] = wrapper_type

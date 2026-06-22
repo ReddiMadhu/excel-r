@@ -1,0 +1,324 @@
+import { useParams, useNavigate } from 'react-router-dom';
+import { ArrowLeft, FileSpreadsheet, Table2, Code2, ExternalLink, Eye, EyeOff, Network } from 'lucide-react';
+import { api } from '../api/client';
+import { useApi } from '../hooks/useApi';
+import { Badge, ComplexityBar, Loader, KPIDashboardGraph } from '../components/shared';
+import { useState } from 'react';
+import LineageGraph from '../components/detail/LineageGraph';
+
+export default function WorkbookDetailView() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { data: wb, loading } = useApi(() => api.getWorkbook(id), [id]);
+  const { data: recs } = useApi(api.getRecommendations);
+  const [activeSheet, setActiveSheet] = useState(null);
+  const [showGraph, setShowGraph] = useState(false);
+
+  if (loading || !wb) return <Loader />;
+
+  const rec = (recs || []).find(r => r.workbook_id === wb.id);
+  const dashboards = wb.dashboards || [];
+  const selectedSheet = activeSheet !== null ? dashboards[activeSheet]
+    : dashboards.length > 0 ? dashboards[0] : null;
+
+  return (
+    <div className="page-enter">
+      {/* Header */}
+      <div style={{ marginBottom: 24 }}>
+        <button className="btn btn-ghost" onClick={() => navigate('/discovery')} style={{ marginBottom: 12 }}>
+          <ArrowLeft size={16} /> Back
+        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <h1>{wb.name}</h1>
+          {rec && <Badge action={rec.action} />}
+        </div>
+        {wb.purpose && <p className="text-secondary" style={{ marginTop: 6 }}>{wb.purpose}</p>}
+      </div>
+
+      {/* Metadata */}
+      <div className="card" style={{ marginBottom: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 20 }}>
+          <MetaItem label="Sheets" value={wb.sheet_count} />
+          <MetaItem label="Calculated Fields" value={wb.calculated_field_count} />
+          <MetaItem label="Datasources" value={wb.datasource_count} />
+          <MetaItem label="Comparison Mode" value={wb.comparison_mode || '—'} />
+          <MetaItem
+            label="Extraction Quality"
+            value={wb.extraction_quality_score != null ? `${Math.round(wb.extraction_quality_score * 100)}%` : '—'}
+          />
+          <MetaItem label="VBA Macros" value={wb.has_vba_macros ? 'Yes' : 'No'} highlight={wb.has_vba_macros} />
+          <div>
+            <div className="text-muted" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Extraction Complexity</div>
+            <ComplexityBar value={wb.extraction_complexity} />
+          </div>
+          <div>
+            <div className="text-muted" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Structural Risk</div>
+            <ComplexityBar value={wb.structural_risk} />
+          </div>
+          <div>
+            <div className="text-muted" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Computation Depth</div>
+            <ComplexityBar value={wb.computation_depth} />
+          </div>
+        </div>
+      </div>
+
+      {/* Relational Schema Graph */}
+      <div className="card" style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showGraph ? 16 : 0 }}>
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Network size={16} style={{ color: 'var(--accent-blue)' }} /> Relational Schema Graph
+          </h3>
+          <button
+            className="btn btn-ghost"
+            onClick={() => setShowGraph(!showGraph)}
+            style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+          >
+            {showGraph ? 'Hide Graph' : 'Show Graph'}
+          </button>
+        </div>
+        {showGraph && (
+          <div style={{ height: 420, marginTop: 12 }}>
+            <KPIDashboardGraph dashboards={dashboards.map(d => d.name).join(',')} height="100%" />
+          </div>
+        )}
+      </div>
+
+      {/* External Links */}
+      {wb.external_links && wb.external_links.length > 0 && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <h3 style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ExternalLink size={16} /> External Links
+          </h3>
+          {wb.external_links.map((link, i) => (
+            <div key={i} className="text-secondary" style={{ fontSize: '0.85rem', padding: '4px 0' }}>
+              {link}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Sheet Tabs */}
+      {dashboards.length > 0 && (
+        <>
+          <div className="tabs">
+            {dashboards.map((d, i) => (
+              <button
+                key={d.id}
+                className={`tab ${(activeSheet === i || (activeSheet === null && i === 0)) ? 'active' : ''}`}
+                onClick={() => setActiveSheet(i)}
+              >
+                {d.name}
+                {d.sheet_type && <span className="text-muted" style={{ fontSize: '0.7rem', marginLeft: 6 }}>
+                  {d.sheet_type}
+                </span>}
+              </button>
+            ))}
+          </div>
+
+          {/* Sheet Detail */}
+          {selectedSheet && <SheetDetail sheet={selectedSheet} />}
+        </>
+      )}
+
+      {/* Recommendation detail */}
+      {rec && rec.action !== 'keep' && (
+        <div className="card" style={{ marginTop: 24, borderColor: 'var(--accent-amber)', borderWidth: 1 }}>
+          <h3 style={{ marginBottom: 8, color: 'var(--accent-amber)' }}>
+            Rationalization Recommendation
+          </h3>
+          {rec.merge_with_name && (
+            <p className="text-secondary" style={{ marginBottom: 8 }}>
+              <strong>{rec.action}</strong> with "{rec.merge_with_name}"
+            </p>
+          )}
+          {rec.reasons && rec.reasons.map((r, i) => (
+            <p key={i} className="text-secondary" style={{ fontSize: '0.85rem' }}>• {r}</p>
+          ))}
+          {rec.common_kpis && rec.common_kpis.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <span className="text-muted" style={{ fontSize: '0.75rem' }}>Common KPIs: </span>
+              {rec.common_kpis.map((k, i) => (
+                <span key={i} className="badge badge-purple" style={{ marginRight: 4, marginTop: 4 }}>{k}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MetaItem({ label, value, highlight }) {
+  return (
+    <div>
+      <div className="text-muted" style={{ fontSize: '0.75rem', marginBottom: 2 }}>{label}</div>
+      <div style={{ fontWeight: 600, color: highlight ? 'var(--accent-rose)' : 'var(--text-primary)' }}>
+        {value ?? '—'}
+      </div>
+    </div>
+  );
+}
+
+function SheetDetail({ sheet }) {
+  const { data: detail, loading } = useApi(() => api.getDashboard(sheet.id), [sheet.id]);
+  const [selectedCol, setSelectedCol] = useState(null);
+
+  if (loading) return <Loader />;
+  if (!detail) return null;
+
+  const cols = detail.columns || [];
+  const worksheets = detail.worksheets || [];
+
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+        <h3>{detail.name}</h3>
+        <div className="text-muted" style={{ fontSize: '0.8rem' }}>
+          {detail.row_count} rows × {detail.column_count} cols
+          &middot; {detail.formula_count || 0} formulas
+          {detail.pivot_table_count > 0 && ` · ${detail.pivot_table_count} pivots`}
+        </div>
+      </div>
+
+      {detail.ai_summary && (
+        <p className="text-secondary" style={{ fontSize: '0.85rem', marginBottom: 16, fontStyle: 'italic' }}>
+          {detail.ai_summary}
+        </p>
+      )}
+
+      {/* Hidden rows/cols indicators */}
+      {(detail.hidden_row_count > 0 || detail.hidden_column_count > 0) && (
+        <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+          {detail.hidden_row_count > 0 && (
+            <span className="badge badge-decommission">
+              <EyeOff size={12} /> {detail.hidden_row_count} hidden rows
+            </span>
+          )}
+          {detail.hidden_column_count > 0 && (
+            <span className="badge badge-decommission">
+              <EyeOff size={12} /> {detail.hidden_column_count} hidden cols
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Tables */}
+      {worksheets.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <h4 className="section-title" style={{ marginBottom: 8 }}>Tables</h4>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {worksheets.map(ws => (
+              <div key={ws.id} className="badge badge-blue">
+                <Table2 size={12} /> {ws.name} ({ws.row_count}×{ws.column_count})
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Lineage Graph Section */}
+      {selectedCol && (
+        <div className="card animate-slide-up" style={{ marginBottom: 24, border: '1px solid var(--glass-border)', background: 'var(--bg-base)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div>
+              <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '1.1rem' }}>
+                <Code2 size={18} style={{ color: 'var(--accent-blue)' }} /> Lineage Graph: {selectedCol.column_name}
+              </h3>
+              <p className="text-secondary" style={{ fontSize: '0.8rem', marginTop: 4 }}>
+                Traces formula dependency flow from source tables into calculation cells
+              </p>
+            </div>
+            <button
+              className="btn btn-ghost"
+              onClick={() => setSelectedCol(null)}
+              style={{ padding: '6px 12px', fontSize: '0.8rem', background: 'var(--bg-surface)' }}
+            >
+              Close Graph
+            </button>
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <p className="text-muted" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Formula Expression</p>
+            <code className="mono" style={{ display: 'block', background: 'var(--bg-surface)', padding: 12, borderRadius: 6, fontSize: '0.8rem', border: '1px solid var(--glass-border)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
+              {selectedCol.formula || 'No formula (Raw Column)'}
+            </code>
+          </div>
+
+          {selectedCol.formula_lineage?.fingerprint && (
+            <div style={{ marginBottom: 16 }}>
+              <p className="text-muted" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Logic Fingerprint</p>
+              <code className="mono" style={{ display: 'block', background: 'var(--bg-surface)', padding: '6px 10px', borderRadius: 6, fontSize: '0.75rem', border: '1px solid var(--glass-border)', color: 'var(--accent-purple)' }}>
+                {selectedCol.formula_lineage.fingerprint}
+              </code>
+            </div>
+          )}
+
+          <LineageGraph
+            columnName={selectedCol.column_name}
+            tableName={selectedCol.table_name || detail.name}
+            formula={selectedCol.formula}
+            lineage={selectedCol.formula_lineage}
+          />
+        </div>
+      )}
+
+      {/* Column table */}
+      {cols.length > 0 && (
+        <div>
+          <div className="section-title" style={{ marginBottom: 8, fontSize: '0.75rem', fontWeight: 600 }}>Sheet Columns (Click row to view lineage graph)</div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Column</th>
+                  <th>Type</th>
+                  <th>Data Type</th>
+                  <th>Formula</th>
+                  <th>Depth</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cols.map(col => {
+                  const isSelected = selectedCol?.id === col.id;
+                  return (
+                    <tr
+                      key={col.id}
+                      onClick={() => setSelectedCol(isSelected ? null : col)}
+                      style={{ cursor: 'pointer' }}
+                      className={isSelected ? 'active' : ''}
+                    >
+                      <td style={{ fontWeight: 500 }}>{col.column_name}</td>
+                      <td>
+                        <span className={`badge ${col.column_type === 'formula_based' ? 'badge-purple' : 'badge-blue'}`}>
+                          {col.column_type || 'data'}
+                        </span>
+                      </td>
+                      <td className="text-muted">{col.data_type || '—'}</td>
+                      <td>
+                        {col.formula ? (
+                          <code className="mono" style={{
+                            fontSize: '0.75rem',
+                            background: 'var(--bg-base)',
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            maxWidth: 300,
+                            display: 'inline-block',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}>{col.formula}</code>
+                        ) : '—'}
+                      </td>
+                      <td className="text-muted">{col.nesting_depth || 0}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+

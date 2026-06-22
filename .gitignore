@@ -5,8 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
-
-# Distribution / packaging
+.scans
 .Python
 build/
 develop-eggs/
@@ -107,7 +106,7 @@ venv.bak/
 
 # VS Code settings
 .vscode/
-
+*scans/
 # Local logs and generated JSON files
 *.json
 !requirements.txt
