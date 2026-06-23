@@ -165,12 +165,15 @@ class Recommender:
 
         # ── Step 4: Route unresolved ambiguous pairs to review ─
         for (id_a, id_b) in ambiguous_pairs:
-            for wb_id in (id_a, id_b):
-                if decisions.get(wb_id, {}).get("action") == "keep":
-                    decisions[wb_id]["action"] = "review"
-                    decisions[wb_id]["reasons"].append(
-                        "Ambiguous overlap — LLM assessment inconclusive; manual review required."
-                    )
+            for wb_id, partner_id in ((id_a, id_b), (id_b, id_a)):
+                if not self._should_route_ambiguous_to_review(
+                    wb_id, partner_id, decisions, pairwise
+                ):
+                    continue
+                decisions[wb_id]["action"] = "review"
+                decisions[wb_id]["reasons"].append(
+                    "Ambiguous overlap — LLM assessment inconclusive; manual review required."
+                )
 
         # ── Step 5: Write to DB ──────────────────────────────
         if workbook_ids:
@@ -312,6 +315,32 @@ class Recommender:
                 "Decommission requires a retain target — manual review required."
             )
 
+    def _should_route_ambiguous_to_review(
+        self,
+        wb_id: int,
+        partner_id: int,
+        decisions: Dict[int, Dict[str, Any]],
+        pairwise: Dict[Tuple[int, int], Dict[str, Any]],
+    ) -> bool:
+        """Decide whether an unresolved ambiguous pair should flip keep → review."""
+        decision = decisions.get(wb_id)
+        if not decision or decision.get("action") != "keep":
+            return False
+
+        if decision.get("_canonical_keeper"):
+            return False
+
+        pair_key = (min(wb_id, partner_id), max(wb_id, partner_id))
+        overlap = pairwise.get(pair_key, {})
+        ds_overlap = overlap.get("ds_overlap", 0.0)
+        uni_score = decision.get("uniqueness_score", 0.0)
+
+        # Similar KPIs but different datasources with reasonable uniqueness → stay keep.
+        if ds_overlap < self.merge_ds and uni_score >= self.keep_uniqueness:
+            return False
+
+        return True
+
     def _assess_ambiguous_pairs(
         self,
         pairwise: Dict[Tuple[int, int], Dict[str, Any]],
@@ -372,6 +401,8 @@ class Recommender:
 
                     if same_work and confidence > 0.7:
                         for wb_id in (id_a, id_b):
+                            if decisions.get(wb_id, {}).get("_canonical_keeper"):
+                                continue
                             other_id = id_b if wb_id == id_a else id_a
                             if decisions.get(wb_id, {}).get("action") in ("keep", "review"):
                                 eq = wb_map.get(wb_id, {}).get("extraction_quality_score") or 1.0
