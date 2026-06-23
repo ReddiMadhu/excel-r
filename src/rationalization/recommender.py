@@ -114,8 +114,8 @@ class Recommender:
             ):
                 action = "decommission"
                 reasons.append(
-                    f"High KPI overlap ({max_kpi:.0%}), datasource overlap ({max_ds:.0%}), "
-                    f"and fingerprint match ({max_fp_ratio:.0%}) with '{most_similar_name}'."
+                    f"High KPI overlap ({max_kpi:.0%}) and datasource overlap ({max_ds:.0%}) "
+                    f"with '{most_similar_name}'."
                 )
             elif max_kpi >= self.merge_kpi and max_ds >= self.merge_ds:
                 action = "merge"
@@ -131,11 +131,6 @@ class Recommender:
             else:
                 action = "keep"
                 reasons.append("No strong overlap detected with other workbooks.")
-
-            if matching_fps:
-                reasons.append(
-                    f"{len(matching_fps)} identical computation fingerprints detected."
-                )
 
             decisions[wb_id] = {
                 "workbook_id": wb_id,
@@ -260,20 +255,17 @@ class Recommender:
             decisions[keeper_id]["merge_with_name"] = None
             decisions[keeper_id]["merge_with_id"] = None
             decisions[keeper_id]["reasons"] = [
-                r for r in decisions[keeper_id].get("reasons", [])
-                if "overlap" not in r.lower() or "retained" in r.lower()
+                f"Retained as canonical workbook over '{decom_name}'."
             ]
-            decisions[keeper_id]["reasons"].append(
-                f"Retained over '{decom_name}' "
-                f"due to higher uniqueness score ({decisions[keeper_id].get('uniqueness_score', 0):.2f})."
-            )
 
+            decisions[decom_id]["action"] = "decommission"
             decisions[decom_id]["merge_with_name"] = keeper_name
             decisions[decom_id]["merge_with_id"] = keeper_id
-            if not any("retained workbook" in r for r in decisions[decom_id].get("reasons", [])):
-                decisions[decom_id]["reasons"].append(
-                    f"Decommission in favor of retained workbook '{keeper_name}'."
-                )
+            decisions[decom_id]["reasons"] = [
+                r for r in decisions[decom_id].get("reasons", [])
+                if "fingerprint" not in r.lower()
+                and "retained workbook" not in r.lower()
+            ]
 
     def _assess_ambiguous_pairs(
         self,

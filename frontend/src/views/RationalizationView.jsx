@@ -23,6 +23,25 @@ export default function RationalizationView() {
     [recs]
   );
 
+  const decommissionPairs = useMemo(() => {
+    const pairMap = new Map();
+    for (const rec of decommissionRecs) {
+      const key = rec.merge_with_id
+        ? [rec.workbook_id, rec.merge_with_id].sort((a, b) => a - b).join('-')
+        : `solo-${rec.workbook_id}`;
+      const existing = pairMap.get(key);
+      if (!existing || (rec.uniqueness_score || 0) < (existing.uniqueness_score || 0)) {
+        pairMap.set(key, rec);
+      }
+    }
+    return [...pairMap.values()];
+  }, [decommissionRecs]);
+
+  const retainTargetIds = useMemo(
+    () => new Set(decommissionRecs.map(r => r.merge_with_id).filter(Boolean)),
+    [decommissionRecs]
+  );
+
   if (loading) return <Loader />;
 
   return (
@@ -56,21 +75,25 @@ export default function RationalizationView() {
             </div>
           )}
 
-          {decommissionRecs.length > 0 && (
+          {decommissionPairs.length > 0 && (
             <div style={{ marginBottom: 24 }}>
               <h3 className="section-title" style={{ marginBottom: 12 }}>
-                DECOMMISSION — {decommissionRecs.length} workbook{decommissionRecs.length > 1 ? 's' : ''}
+                DECOMMISSION — {decommissionPairs.length} pair{decommissionPairs.length > 1 ? 's' : ''}
               </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {decommissionRecs.map(rec => (
-                  <DecommissionPairCard key={rec.id} rec={rec} />
+                {decommissionPairs.map(rec => (
+                  <DecommissionPairCard key={`${rec.workbook_id}-${rec.merge_with_id}`} rec={rec} />
                 ))}
               </div>
             </div>
           )}
 
           {['merge', 'review', 'keep'].map(action => {
-            const group = recs.filter(r => r.action === action);
+            const group = recs.filter(r => {
+              if (r.action !== action) return false;
+              if (action === 'keep' && retainTargetIds.has(r.workbook_id)) return false;
+              return true;
+            });
             if (!group.length) return null;
             return (
               <div key={action} style={{ marginBottom: 24 }}>
@@ -160,7 +183,18 @@ function OverlapHeatmap({ workbooks, pairs }) {
   );
 }
 
+function decommissionReasons(reasons) {
+  return (reasons || []).filter(r => {
+    const lower = r.toLowerCase();
+    return !lower.includes('fingerprint')
+      && !lower.includes('retained workbook')
+      && !lower.includes('retained over');
+  });
+}
+
 function DecommissionPairCard({ rec }) {
+  const reasons = decommissionReasons(rec.reasons);
+
   return (
     <div className="card" style={{ borderLeft: '3px solid var(--status-decommission)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
@@ -187,29 +221,11 @@ function DecommissionPairCard({ rec }) {
             </div>
           </div>
 
-          {rec.reasons && rec.reasons.map((reason, i) => (
+          {reasons.map((reason, i) => (
             <p key={i} className="text-muted" style={{ fontSize: '0.8rem', marginBottom: 2 }}>
               {reason}
             </p>
           ))}
-
-          {rec.matching_fingerprints && rec.matching_fingerprints.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <span className="text-muted" style={{ fontSize: '0.7rem' }}>Matching fingerprints: </span>
-              {rec.matching_fingerprints.map((fp, i) => (
-                <code key={i} className="mono" style={{
-                  fontSize: '0.7rem',
-                  background: 'var(--bg-base)',
-                  padding: '2px 6px',
-                  borderRadius: 4,
-                  marginRight: 4,
-                  marginTop: 4,
-                  display: 'inline-block',
-                  color: 'var(--accent-purple)',
-                }}>{fp}</code>
-              ))}
-            </div>
-          )}
 
           {rec.llm_justification && (
             <p style={{ fontSize: '0.85rem', color: 'var(--accent-purple)', marginTop: 8, fontStyle: 'italic' }}>

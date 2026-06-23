@@ -4,6 +4,28 @@ import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
 import { StatCard, Badge, Loader, EmptyState } from '../components/shared';
 
+function effectiveRecAction(wbId, rec, allRecs) {
+  if (!rec) return null;
+  const retainedBy = (allRecs || []).find(
+    r => (r.action === 'decommission' || r.action === 'delete') && r.merge_with_id === wbId
+  );
+  if (retainedBy && retainedBy.workbook_id !== wbId) return 'keep';
+  if (rec.action === 'decommission' || rec.action === 'delete') {
+    const opposing = (allRecs || []).find(
+      r => (r.action === 'decommission' || r.action === 'delete')
+        && r.workbook_id === rec.merge_with_id && r.merge_with_id === wbId
+    );
+    if (opposing && (rec.uniqueness_score || 0) > (opposing.uniqueness_score || 0)) return 'keep';
+  }
+  return rec.action;
+}
+
+function shouldShowRecHint(wbId, rec, allRecs) {
+  const action = effectiveRecAction(wbId, rec, allRecs);
+  if (!rec || action === 'keep' || !rec.merge_with_name) return false;
+  return true;
+}
+
 export default function PortfolioView() {
   const navigate = useNavigate();
   const { data: workbooks, loading: wbLoading } = useApi(api.getWorkbooks);
@@ -46,6 +68,7 @@ export default function PortfolioView() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {workbooks.map(wb => {
             const rec = recMap[wb.id];
+            const displayAction = effectiveRecAction(wb.id, rec, recommendations);
             return (
               <div
                 key={wb.id}
@@ -55,7 +78,7 @@ export default function PortfolioView() {
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                     <h3>{wb.name}</h3>
-                    {rec && <Badge action={rec.action} />}
+                    {displayAction && <Badge action={displayAction} />}
                   </div>
                   <p className="text-secondary" style={{ fontSize: '0.85rem', marginBottom: 8 }}>
                     {wb.sheet_count} sheets &middot; {wb.calculated_field_count || 0} calc fields
@@ -65,12 +88,12 @@ export default function PortfolioView() {
                   {wb.purpose && (
                     <p className="text-muted" style={{ fontSize: '0.8rem' }}>{wb.purpose}</p>
                   )}
-                  {rec && rec.action !== 'keep' && rec.merge_with_name && (
+                  {rec && shouldShowRecHint(wb.id, rec, recommendations) && (
                     <p style={{ fontSize: '0.8rem', color: 'var(--accent-amber)', marginTop: 6 }}>
                       <GitCompare size={13} style={{ verticalAlign: -2 }} />{' '}
-                      {rec.action === 'decommission'
+                      {displayAction === 'decommission'
                         ? `Decommission → retain "${rec.merge_with_name}"`
-                        : rec.action === 'merge'
+                        : displayAction === 'merge'
                           ? `Merge with "${rec.merge_with_name}"`
                           : `Related to "${rec.merge_with_name}"`}
                       {rec.kpi_overlap_score > 0 && ` (${Math.round(rec.kpi_overlap_score * 100)}% KPI overlap)`}
