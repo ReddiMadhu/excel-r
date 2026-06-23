@@ -18,6 +18,11 @@ export default function RationalizationView() {
     };
   }, [recs]);
 
+  const decommissionRecs = useMemo(
+    () => (recs || []).filter(r => r.action === 'decommission' || r.action === 'delete'),
+    [recs]
+  );
+
   if (loading) return <Loader />;
 
   return (
@@ -51,7 +56,20 @@ export default function RationalizationView() {
             </div>
           )}
 
-          {['decommission', 'delete', 'merge', 'review', 'keep'].map(action => {
+          {decommissionRecs.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <h3 className="section-title" style={{ marginBottom: 12 }}>
+                DECOMMISSION — {decommissionRecs.length} workbook{decommissionRecs.length > 1 ? 's' : ''}
+              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {decommissionRecs.map(rec => (
+                  <DecommissionPairCard key={rec.id} rec={rec} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {['merge', 'review', 'keep'].map(action => {
             const group = recs.filter(r => r.action === action);
             if (!group.length) return null;
             return (
@@ -142,6 +160,83 @@ function OverlapHeatmap({ workbooks, pairs }) {
   );
 }
 
+function DecommissionPairCard({ rec }) {
+  return (
+    <div className="card" style={{ borderLeft: '3px solid var(--status-decommission)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+            <div style={{
+              padding: 12,
+              borderRadius: 8,
+              background: 'var(--status-decommission-bg)',
+              border: '1px solid var(--status-decommission)',
+            }}>
+              <p className="text-muted" style={{ fontSize: '0.7rem', marginBottom: 4 }}>Decommission</p>
+              <p style={{ fontWeight: 600, fontSize: '0.9rem' }}>{rec.workbook_name}</p>
+            </div>
+            <span className="text-muted" style={{ fontSize: '1.2rem' }}>→</span>
+            <div style={{
+              padding: 12,
+              borderRadius: 8,
+              background: 'var(--status-keep-bg)',
+              border: '1px solid var(--accent-emerald)',
+            }}>
+              <p className="text-muted" style={{ fontSize: '0.7rem', marginBottom: 4 }}>Retain</p>
+              <p style={{ fontWeight: 600, fontSize: '0.9rem' }}>{rec.merge_with_name || '—'}</p>
+            </div>
+          </div>
+
+          {rec.reasons && rec.reasons.map((reason, i) => (
+            <p key={i} className="text-muted" style={{ fontSize: '0.8rem', marginBottom: 2 }}>
+              {reason}
+            </p>
+          ))}
+
+          {rec.matching_fingerprints && rec.matching_fingerprints.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <span className="text-muted" style={{ fontSize: '0.7rem' }}>Matching fingerprints: </span>
+              {rec.matching_fingerprints.map((fp, i) => (
+                <code key={i} className="mono" style={{
+                  fontSize: '0.7rem',
+                  background: 'var(--bg-base)',
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                  marginRight: 4,
+                  marginTop: 4,
+                  display: 'inline-block',
+                  color: 'var(--accent-purple)',
+                }}>{fp}</code>
+              ))}
+            </div>
+          )}
+
+          {rec.llm_justification && (
+            <p style={{ fontSize: '0.85rem', color: 'var(--accent-purple)', marginTop: 8, fontStyle: 'italic' }}>
+              AI: {rec.llm_justification}
+            </p>
+          )}
+        </div>
+
+        <div style={{ textAlign: 'right', minWidth: 120 }}>
+          <ScoreRow label="KPI Overlap" value={rec.kpi_overlap_score} />
+          <ScoreRow label="DS Overlap" value={rec.datasource_overlap_score} />
+          <ScoreRow label="Uniqueness" value={rec.uniqueness_score} inverse />
+        </div>
+      </div>
+
+      {rec.common_kpis && rec.common_kpis.length > 0 && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--glass-border)' }}>
+          <span className="text-muted" style={{ fontSize: '0.7rem' }}>Common KPIs: </span>
+          {rec.common_kpis.map((k, i) => (
+            <span key={i} className="badge badge-purple" style={{ marginRight: 4, marginTop: 2 }}>{k}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RecommendationCard({ rec }) {
   return (
     <div className="card">
@@ -153,19 +248,10 @@ function RecommendationCard({ rec }) {
             {rec.llm_override && <span className="badge badge-purple">AI Override</span>}
           </div>
 
-          {rec.scores?.comparison_mode && (
-            <p className="text-muted" style={{ fontSize: '0.75rem', marginBottom: 6 }}>
-              Mode: {rec.scores.comparison_mode}
-              {rec.scores.extraction_quality_score != null && (
-                <> · Quality: {Math.round(rec.scores.extraction_quality_score * 100)}%</>
-              )}
-            </p>
-          )}
-
-          {rec.merge_with_name && (
+          {rec.action === 'merge' && rec.merge_with_name && (
             <p className="text-secondary" style={{ fontSize: '0.85rem', marginBottom: 6 }}>
               <GitMerge size={14} style={{ verticalAlign: -2 }} />{' '}
-              {rec.action === 'merge' ? 'Merge' : 'Compare'} with "{rec.merge_with_name}"
+              Merge with &quot;{rec.merge_with_name}&quot;
             </p>
           )}
 

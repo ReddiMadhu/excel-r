@@ -58,13 +58,14 @@ class Recommender:
         if workbook_ids:
             placeholders = ",".join("?" * len(workbook_ids))
             workbooks = self.db.query(
-                f"SELECT id, name, purpose, extraction_quality_score, comparison_mode "
-                f"FROM workbooks WHERE id IN ({placeholders})",
+                f"SELECT id, name, purpose, extraction_quality_score, comparison_mode, "
+                f"extraction_complexity FROM workbooks WHERE id IN ({placeholders})",
                 tuple(workbook_ids),
             )
         else:
             workbooks = self.db.query(
-                "SELECT id, name, purpose, extraction_quality_score, comparison_mode FROM workbooks"
+                "SELECT id, name, purpose, extraction_quality_score, comparison_mode, "
+                "extraction_complexity FROM workbooks"
             )
         wb_map = {wb["id"]: wb for wb in workbooks}
 
@@ -153,6 +154,9 @@ class Recommender:
                 "llm_justification": None,
             }
 
+        # ── Step 1b: Resolve symmetric decommission conflicts ─
+        self._resolve_decommission_conflicts(decisions, wb_map)
+
         # ── Step 2: LLM for ambiguous pairs (required) ───────
         ambiguous_pairs = self._assess_ambiguous_pairs(pairwise, wb_map, decisions)
 
@@ -205,6 +209,71 @@ class Recommender:
             sum(1 for d in decisions.values() if d["action"] == "review"),
         )
         return list(decisions.values())
+
+    def _resolve_decommission_conflicts(
+        self,
+        decisions: Dict[int, Dict[str, Any]],
+        wb_map: Dict[int, Dict],
+    ) -> None:
+        """When two workbooks both decommission pointing at each other, keep one."""
+        seen_pairs: set = set()
+
+        for wb_id, decision in list(decisions.items()):
+            if decision.get("action") != "decommission":
+                continue
+
+            other_id = decision.get("merge_with_id")
+            if not other_id:
+                continue
+
+            pair_key = (min(wb_id, other_id), max(wb_id, other_id))
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+
+            other_decision = decisions.get(other_id)
+            if (
+                not other_decision
+                or other_decision.get("action") != "decommission"
+                or other_decision.get("merge_with_id") != wb_id
+            ):
+                continue
+
+            def _keeper_score(wid: int) -> tuple:
+                dec = decisions[wid]
+                wb = wb_map.get(wid, {})
+                complexity = wb.get("extraction_complexity")
+                if complexity is None:
+                    complexity = 999.0
+                return (
+                    dec.get("uniqueness_score", 0.0),
+                    -complexity,
+                    -wid,
+                )
+
+            keeper_id = wb_id if _keeper_score(wb_id) >= _keeper_score(other_id) else other_id
+            decom_id = other_id if keeper_id == wb_id else wb_id
+            keeper_name = wb_map.get(keeper_id, {}).get("name", "")
+            decom_name = wb_map.get(decom_id, {}).get("name", "")
+
+            decisions[keeper_id]["action"] = "keep"
+            decisions[keeper_id]["merge_with_name"] = None
+            decisions[keeper_id]["merge_with_id"] = None
+            decisions[keeper_id]["reasons"] = [
+                r for r in decisions[keeper_id].get("reasons", [])
+                if "overlap" not in r.lower() or "retained" in r.lower()
+            ]
+            decisions[keeper_id]["reasons"].append(
+                f"Retained over '{decom_name}' "
+                f"due to higher uniqueness score ({decisions[keeper_id].get('uniqueness_score', 0):.2f})."
+            )
+
+            decisions[decom_id]["merge_with_name"] = keeper_name
+            decisions[decom_id]["merge_with_id"] = keeper_id
+            if not any("retained workbook" in r for r in decisions[decom_id].get("reasons", [])):
+                decisions[decom_id]["reasons"].append(
+                    f"Decommission in favor of retained workbook '{keeper_name}'."
+                )
 
     def _assess_ambiguous_pairs(
         self,

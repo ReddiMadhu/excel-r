@@ -106,6 +106,7 @@ async def get_dashboard(dashboard_id: int):
             measures=_pj(ws.get("measures")),
             dimensions=_pj(ws.get("dimensions")),
             mark_type=ws.get("mark_type", "table"),
+            summary_rows=_pj(ws.get("summary_rows")),
         )
         for ws in worksheets
     ]

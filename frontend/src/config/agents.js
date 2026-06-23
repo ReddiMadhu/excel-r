@@ -2,6 +2,7 @@ import { Search, Brain, GitCompare } from 'lucide-react';
 import PortfolioView from '../views/PortfolioView';
 import KpiExplorerView from '../views/KpiExplorerView';
 import LandscapeView from '../views/LandscapeView';
+import TableCatalogView from '../views/TableCatalogView';
 import RationalizationView from '../views/RationalizationView';
 import RiskDashboardView from '../views/RiskDashboardView';
 
@@ -32,6 +33,7 @@ export const agents = [
     routes: ['/intelligence'],
     tabs: [
       { id: 'kpi', label: 'KPI Explorer', path: '/intelligence/kpi', Component: KpiExplorerView },
+      { id: 'tables', label: 'Table Catalog', path: '/intelligence/tables', Component: TableCatalogView },
       { id: 'landscape', label: 'Landscape Graph', path: '/intelligence/landscape', Component: LandscapeView },
     ],
     metrics: (m) => [

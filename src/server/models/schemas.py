@@ -133,6 +133,7 @@ class WorksheetSummary(BaseModel):
     measures: Optional[List[str]] = None
     dimensions: Optional[List[str]] = None
     mark_type: str = "table"
+    summary_rows: Optional[List[Dict[str, Any]]] = None
 
 
 class ColumnSummary(BaseModel):

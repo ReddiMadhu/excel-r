@@ -83,6 +83,7 @@ export default function App() {
               <Route path="/discovery" element={<AgentWorkspaceView agentId="discovery" />} />
               <Route path="/intelligence" element={<Navigate to="/intelligence/kpi" replace />} />
               <Route path="/intelligence/kpi" element={<AgentWorkspaceView agentId="intelligence" />} />
+              <Route path="/intelligence/tables" element={<AgentWorkspaceView agentId="intelligence" />} />
               <Route path="/intelligence/landscape" element={<AgentWorkspaceView agentId="intelligence" />} />
               <Route path="/rationalization" element={<AgentWorkspaceView agentId="rationalization" />} />
               <Route path="/rationalization/risks" element={<AgentWorkspaceView agentId="rationalization" />} />
