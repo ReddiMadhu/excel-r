@@ -82,7 +82,8 @@ For each workbook, return a JSON object with:
   "justification": "1-2 sentence business justification for this action",
   "ai_summary": "2-3 sentence summary of what this workbook does",
   "domain_classification": "one of: reserves, compensation, claims, underwriting, investments, operations, other",
-  "line_of_business": "specific line of business (e.g., Life Insurance, Annuities, Group Benefits)",
+  "line_of_business": "high-level line of business using simple labels (e.g., Insurance, Group Benefits, Annuities)",
+  "user_groups": ["list of business user groups or teams that use this workbook, e.g. Actuarial, Finance, Underwriting"],
   "override_reason": null
 }}
 
@@ -92,3 +93,21 @@ Only override if you have a strong business reason.
 
 Return a JSON array of objects, one per workbook.
 Return ONLY the JSON array. No markdown, no explanation."""
+
+
+INTELLIGENCE_METADATA_PROMPT = """You are a BI governance analyst classifying Excel workbook summary reports.
+
+Workbook: "{workbook_name}"
+Purpose: {purpose}
+Sheet names: {sheet_names}
+Sample KPIs: {kpis}
+
+Return a JSON object:
+{{
+  "ai_summary": "2-3 sentence plain-language summary of what this workbook does and who uses it",
+  "domain_classification": "one of: reserves, compensation, claims, underwriting, investments, operations, other",
+  "line_of_business": "high-level line of business using simple labels (e.g., Insurance, Group Benefits, Annuities)",
+  "user_groups": ["business teams or roles that would use this workbook, e.g. Actuarial, Finance"]
+}}
+
+Return ONLY the JSON object. No markdown."""

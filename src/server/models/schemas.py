@@ -117,6 +117,7 @@ class DashboardSummary(BaseModel):
     ai_summary: Optional[str] = None
     domain_classification: Optional[str] = None
     line_of_business: Optional[str] = None
+    user_groups: Optional[List[str]] = None
     complexity_score: Optional[float] = None
     is_real_ai: bool = False
 
@@ -134,6 +135,8 @@ class WorksheetSummary(BaseModel):
     dimensions: Optional[List[str]] = None
     mark_type: str = "table"
     summary_rows: Optional[List[Dict[str, Any]]] = None
+    pivot_configuration: Optional[Any] = None
+    inter_table_relationships: Optional[List[str]] = None
 
 
 class ColumnSummary(BaseModel):
@@ -255,6 +258,59 @@ class PairwiseOverlap(BaseModel):
 class PairwiseMatrixResponse(BaseModel):
     workbooks: List[Dict[str, Any]]
     pairs: List[PairwiseOverlap]
+
+
+# ── Discovery Catalog Models ─────────────────────────────────
+
+class CatalogSheetSummary(BaseModel):
+    id: int
+    name: str
+    sheet_type: Optional[str] = None
+    line_of_business: Optional[str] = None
+    domain_classification: Optional[str] = None
+    user_groups: List[str] = Field(default_factory=list)
+    ai_summary: Optional[str] = None
+    formula_count: Optional[int] = None
+    table_count: Optional[int] = None
+    pivot_table_count: Optional[int] = None
+    filter_count: int = 0
+    filters: Optional[List[Dict[str, str]]] = None
+
+
+class CatalogWorkbookEntry(BaseModel):
+    id: int
+    name: str
+    purpose: Optional[str] = None
+    line_of_business: Optional[str] = None
+    primary_business_group: Optional[str] = None
+    domain_classification: Optional[str] = None
+    user_groups: List[str] = Field(default_factory=list)
+    metadata_suggested: bool = False
+    summary_sheet_name: Optional[str] = None
+    raw_data_sheet_name: Optional[str] = None
+    primary_inputs: List[str] = Field(default_factory=list)
+    intermediate_calculations: List[str] = Field(default_factory=list)
+    final_outputs: List[str] = Field(default_factory=list)
+    has_vba_macros: bool = False
+    external_link_count: int = 0
+    extraction_quality_score: Optional[float] = None
+    comparison_mode: Optional[str] = None
+    vulnerability_rating: Optional[str] = None
+    uploaded_at: Optional[str] = None
+    sheet_count: Optional[int] = None
+    metadata_enriched: bool = False
+    sheets: List[CatalogSheetSummary] = Field(default_factory=list)
+
+
+class BusinessCatalogResponse(BaseModel):
+    workbooks: List[CatalogWorkbookEntry]
+    by_lob: Dict[str, List[int]] = Field(default_factory=dict)
+    by_user_group: Dict[str, List[int]] = Field(default_factory=dict)
+    by_domain: Dict[str, List[int]] = Field(default_factory=dict)
+    unclassified_workbook_ids: List[int] = Field(default_factory=list)
+    lobs: List[str] = Field(default_factory=list)
+    user_groups: List[str] = Field(default_factory=list)
+    domains: List[str] = Field(default_factory=list)
 
 
 # Fix forward references

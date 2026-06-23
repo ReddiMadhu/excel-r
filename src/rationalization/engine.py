@@ -21,8 +21,25 @@ from src.rationalization.overlap_scorer import (
 from src.rationalization.complexity_scorer import compute_complexity_scores
 from src.rationalization.recommender import Recommender
 from src.rationalization.risk_detector import detect_workbook_risks
+from src.rationalization.prompts import INTELLIGENCE_METADATA_PROMPT
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_user_groups(val) -> List[str]:
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return [str(g).strip() for g in val if str(g).strip()]
+    if isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+            if isinstance(parsed, list):
+                return [str(g).strip() for g in parsed if str(g).strip()]
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return [s.strip() for s in val.split(",") if s.strip()]
+    return []
 
 
 class LLMCaller:
@@ -127,7 +144,93 @@ class RationalizationEngine:
             logger.exception("KPI canonicalization failed: %s", e)
             summary["kpi_error"] = str(e)
 
+        logger.info("── Dashboard Metadata Enrichment ──")
+        try:
+            enriched = self._enrich_dashboard_metadata(workbook_ids=workbook_ids)
+            summary["dashboard_metadata_enriched"] = enriched
+        except Exception as e:
+            logger.exception("Dashboard metadata enrichment failed: %s", e)
+            summary["metadata_error"] = str(e)
+
         return summary
+
+    def _enrich_dashboard_metadata(self, workbook_ids: Optional[List[int]] = None) -> int:
+        """Populate LOB, domain, and user_groups on summary dashboards via LLM."""
+        if not self._llm_caller:
+            return 0
+
+        if workbook_ids:
+            placeholders = ",".join("?" * len(workbook_ids))
+            workbooks = self.db.query(
+                f"SELECT id, name, purpose FROM workbooks WHERE id IN ({placeholders})",
+                tuple(workbook_ids),
+            )
+        else:
+            workbooks = self.db.query("SELECT id, name, purpose FROM workbooks")
+
+        updated = 0
+        for wb in workbooks:
+            dashboards = self.db.query(
+                "SELECT id, name, sheet_type, line_of_business, domain_classification, user_groups "
+                "FROM dashboards WHERE workbook_id = ?",
+                (wb["id"],),
+            )
+            summary_dashes = [
+                d for d in dashboards
+                if d.get("sheet_type") == "summary_report"
+                and (
+                    not (d.get("line_of_business") or d.get("domain_classification"))
+                    or not _parse_user_groups(d.get("user_groups"))
+                )
+            ]
+            if not summary_dashes:
+                continue
+
+            kpi_rows = self.db.query(
+                "SELECT DISTINCT name FROM calculated_fields WHERE workbook_id = ? LIMIT 15",
+                (wb["id"],),
+            )
+            kpis = [r["name"] for r in kpi_rows]
+            sheet_names = [d["name"] for d in dashboards]
+
+            prompt = INTELLIGENCE_METADATA_PROMPT.format(
+                workbook_name=wb.get("name", ""),
+                purpose=wb.get("purpose") or "N/A",
+                sheet_names=", ".join(sheet_names) or "N/A",
+                kpis=", ".join(kpis) or "N/A",
+            )
+
+            try:
+                response = self._llm_caller(prompt)
+            except Exception as e:
+                logger.warning("Metadata LLM failed for workbook %s: %s", wb["id"], e)
+                continue
+
+            if not response or not isinstance(response, dict):
+                continue
+
+            domain = response.get("domain_classification", "")
+            lob = response.get("line_of_business", "")
+            user_groups = response.get("user_groups") or []
+            ai_summary = response.get("ai_summary", "")
+
+            if not (domain or lob or user_groups or ai_summary):
+                continue
+
+            for dash in summary_dashes:
+                patch = {"is_real_ai": True}
+                if ai_summary:
+                    patch["ai_summary"] = ai_summary
+                if domain:
+                    patch["domain_classification"] = domain
+                if lob:
+                    patch["line_of_business"] = lob
+                if user_groups:
+                    patch["user_groups"] = user_groups
+                self.db.update("dashboards", patch, "id = ?", (dash["id"],))
+            updated += 1
+
+        return updated
 
     def run_rationalization(self, workbook_ids: Optional[List[int]] = None) -> dict:
         """

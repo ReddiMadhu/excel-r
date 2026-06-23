@@ -59,6 +59,9 @@ Workbook Skeleton:
 Please generate a JSON object with the following schema:
 {{
   "workbook_purpose": "A concise (2-3 sentences) description of the business purpose and goals of this workbook.",
+  "line_of_business": "High-level line of business using simple labels (e.g., Insurance, Group Benefits, Annuities, Worksite Insurance)",
+  "domain_classification": "Business domain: reserves, compensation, claims, underwriting, investments, operations, or other",
+  "user_groups": ["Teams that use this workbook, e.g. Actuarial, Finance, Underwriting"],
   "process_flow": {{
     "primary_inputs": ["SheetName or TableName that acts as raw inputs"],
     "intermediate_calculations": ["TableName or SheetName representing calculations"],
@@ -374,11 +377,17 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
         semantics = analyze_workbook_semantics_llm(skeleton)
     
     workbook_purpose = ""
+    line_of_business = ""
+    domain_classification = ""
+    user_groups = []
     process_flow = {}
     table_semantics = {}
     
     if semantics:
         workbook_purpose = semantics.get("workbook_purpose", "")
+        line_of_business = semantics.get("line_of_business", "")
+        domain_classification = semantics.get("domain_classification", "")
+        user_groups = semantics.get("user_groups") or []
         process_flow = semantics.get("process_flow", {})
         for tbl_sem in semantics.get("tables", []):
             t_name_sem = tbl_sem.get("table_name", "")
@@ -1081,11 +1090,26 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
     for sheet_json in sheets_json:
         normalize_pivot_metadata_only(sheet_json)
         
+    from src.utils.business_metadata import infer_business_metadata, merge_business_metadata
+
+    line_of_business, domain_classification, user_groups = merge_business_metadata(
+        line_of_business,
+        domain_classification,
+        user_groups,
+        infer_business_metadata(
+            workbook_purpose or "Excel summary/report extraction for decommission and rationalization",
+            os.path.basename(file_name),
+        ),
+    )
+
     final_json = {
         "schema_version": "7.0-rationalized",
         "file_name": os.path.basename(file_name),
         "generated_at": datetime.datetime.now().isoformat(),
         "purpose": workbook_purpose or "Excel summary/report extraction for decommission and rationalization",
+        "line_of_business": line_of_business,
+        "domain_classification": domain_classification,
+        "user_groups": user_groups,
         "process_flow": process_flow,
         "workbook_metadata": {
             "file_name": os.path.basename(file_name),

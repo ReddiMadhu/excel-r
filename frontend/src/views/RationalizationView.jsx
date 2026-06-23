@@ -2,7 +2,9 @@ import { useMemo } from 'react';
 import { CheckCircle, GitMerge, Trash2, AlertCircle } from 'lucide-react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
-import { StatCard, Badge, Loader, EmptyState } from '../components/shared';
+import { StatCard, Loader, EmptyState } from '../components/shared';
+import PageHeader from '../components/layout/PageHeader';
+import { KPIDashboardGraph } from '../components/shared/KPIDashboardGraph';
 
 export default function RationalizationView() {
   const { data: recs, loading } = useApi(api.getRecommendations);
@@ -24,15 +26,20 @@ export default function RationalizationView() {
   );
 
   const decommissionPairs = useMemo(() => {
+    const retainTargets = new Set(
+      decommissionRecs.map(r => r.merge_with_id).filter(Boolean),
+    );
+
+    const paired = decommissionRecs.filter(rec => {
+      if (!rec.merge_with_id) return false;
+      if (retainTargets.has(rec.workbook_id)) return false;
+      return true;
+    });
+
     const pairMap = new Map();
-    for (const rec of decommissionRecs) {
-      const key = rec.merge_with_id
-        ? [rec.workbook_id, rec.merge_with_id].sort((a, b) => a - b).join('-')
-        : `solo-${rec.workbook_id}`;
-      const existing = pairMap.get(key);
-      if (!existing || (rec.uniqueness_score || 0) < (existing.uniqueness_score || 0)) {
-        pairMap.set(key, rec);
-      }
+    for (const rec of paired) {
+      const key = [rec.workbook_id, rec.merge_with_id].sort((a, b) => a - b).join('-');
+      if (!pairMap.has(key)) pairMap.set(key, rec);
     }
     return [...pairMap.values()];
   }, [decommissionRecs]);
@@ -42,11 +49,16 @@ export default function RationalizationView() {
     [decommissionRecs]
   );
 
+  const workbookIds = useMemo(
+    () => (pairwise?.workbooks || []).map(w => w.id),
+    [pairwise]
+  );
+
   if (loading) return <Loader />;
 
   return (
     <div className="page-enter">
-      <h1 style={{ marginBottom: 24 }}>Rationalization Results</h1>
+      <PageHeader title="Rationalization Results" />
 
       <div className="stat-grid">
         <StatCard icon={CheckCircle} value={counts.keep} label="Keep" color="emerald" />
@@ -63,6 +75,21 @@ export default function RationalizationView() {
         />
       ) : (
         <div>
+          {workbookIds.length > 1 && (
+            <div className="card" style={{ marginBottom: 24 }}>
+              <h3 style={{ marginBottom: 8 }}>Workbook Relationship Map</h3>
+              <p className="text-secondary" style={{ fontSize: '0.85rem', marginBottom: 16, lineHeight: 1.5 }}>
+                How workbooks relate through shared KPIs and datasources. Node color reflects the rationalization
+                recommendation; thicker edges indicate stronger KPI and datasource overlap.
+              </p>
+              <KPIDashboardGraph
+                view="rationalization"
+                workbookIds={workbookIds}
+                height="520px"
+              />
+            </div>
+          )}
+
           {pairwise && pairwise.workbooks?.length > 1 && (
             <div className="card" style={{ marginBottom: 24 }}>
               <h3 style={{ marginBottom: 16 }}>KPI Overlap Matrix</h3>
@@ -260,7 +287,6 @@ function RecommendationCard({ rec }) {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
             <h3 style={{ fontSize: '1rem' }}>{rec.workbook_name}</h3>
-            <Badge action={rec.action} />
             {rec.llm_override && <span className="badge badge-purple">AI Override</span>}
           </div>
 

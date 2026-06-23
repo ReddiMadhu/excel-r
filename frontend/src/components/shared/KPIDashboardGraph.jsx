@@ -1,20 +1,56 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import * as d3 from 'd3';
 import { AlertCircle, Sparkles, Maximize2, X, Loader2 } from 'lucide-react';
 import { api } from '../../api/client';
 import { Loader } from './index';
 
 const COLOR_MAP = {
-  'Dashboard': 'var(--accent-blue)',       // orange primary
-  'KPI': 'var(--accent-emerald)',          // green
-  'Business Area': 'var(--accent-purple)', // coral/purple
-  'User Group': 'var(--accent-amber)',     // yellow/amber
-  'Table': 'var(--accent-rose)',           // red
-  'Granularity Level': '#8b4513',          // brown
-  'Access Recency': '#ec4899'              // pink
+  'Workbook': 'var(--accent-blue)',
+  'Dashboard': 'var(--accent-blue)',
+  'KPI': 'var(--accent-emerald)',
+  'Shared KPI': 'var(--accent-emerald)',
+  'Line of Business': 'var(--accent-blue)',
+  'Business Area': 'var(--accent-purple)',
+  'User Group': 'var(--accent-amber)',
+  'Table': 'var(--accent-rose)',
+  'Datasource': '#0d9488',
+  'Shared Datasource': '#0d9488',
+  'Granularity Level': '#8b4513',
+  'Upload Age': '#ec4899',
 };
 
-export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedView = false, onMinimize }) {
+const LEGEND_ITEMS = [
+  { group: 'Workbook', label: 'Workbook' },
+  { group: 'Dashboard', label: 'Sheet' },
+  { group: 'KPI', label: 'KPI' },
+  { group: 'Shared KPI', label: 'Shared KPI' },
+  { group: 'Line of Business', label: 'Line of Business' },
+  { group: 'Business Area', label: 'Business Area' },
+  { group: 'User Group', label: 'User Group' },
+  { group: 'Table', label: 'Table' },
+  { group: 'Datasource', label: 'Datasource' },
+  { group: 'Shared Datasource', label: 'Shared Source' },
+  { group: 'Granularity Level', label: 'Granularity' },
+  { group: 'Upload Age', label: 'Upload Age' },
+];
+
+const ACTION_COLORS = {
+  keep: 'var(--accent-emerald)',
+  merge: 'var(--accent-amber)',
+  decommission: 'var(--status-decommission)',
+  delete: 'var(--status-decommission)',
+  review: 'var(--accent-blue)',
+};
+
+export function KPIDashboardGraph({
+  dashboards,
+  workbookId,
+  workbookIds,
+  view = 'landscape',
+  height = '600px',
+  isMaximizedView = false,
+  onMinimize,
+}) {
   const svgRef = useRef(null);
   const containerRef = useRef(null);
   const tooltipRef = useRef(null);
@@ -26,6 +62,16 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
   const [showSummary, setShowSummary] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
   const [activeHighlight, setActiveHighlight] = useState(null);
+  const [presentGroups, setPresentGroups] = useState(new Set());
+
+  const graphParams = useMemo(() => ({
+    dashboards,
+    workbookId,
+    workbookIds,
+    view,
+  }), [dashboards, workbookId, workbookIds, view]);
+
+  const isRationalization = view === 'rationalization';
 
   // References to D3 nodes/links to trigger updates from parent React events
   const highlightGraphRef = useRef(null);
@@ -39,15 +85,16 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
         setIsLoading(true);
         setError(null);
         
-        const data = await api.getKpiGraphData(dashboards);
-        
+        const data = await api.getKpiGraphData(graphParams);
+
         if (!data.nodes || data.nodes.length === 0) {
-          throw new Error('No relational graph nodes found for the selected dashboards.');
+          throw new Error('No graph nodes found for the selected scope.');
         }
 
+        setPresentGroups(new Set(data.nodes.map(n => n.group)));
         drawGraph(data.nodes, data.links);
       } catch (err) {
-        logger.error('Failed to load KPI graph:', err);
+        console.error('Failed to load KPI graph:', err);
         setError(err.message || 'Failed to render D3 visualization.');
       } finally {
         setIsLoading(false);
@@ -86,10 +133,10 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
       const link = g.append('g')
         .attr('stroke', 'var(--glass-border)')
         .attr('stroke-opacity', 0.6)
-        .attr('stroke-width', 2)
         .selectAll('line')
         .data(links)
-        .join('line');
+        .join('line')
+        .attr('stroke-width', d => d.stroke_width || 2);
 
       // Draw link labels if present
       const linkLabel = g.append('g')
@@ -114,8 +161,13 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
 
       // Draw node circles
       node.append('circle')
-        .attr('r', d => d.group === 'Dashboard' ? 24 : 16)
-        .attr('fill', d => COLOR_MAP[d.group] || 'var(--text-muted)')
+        .attr('r', d => (d.group === 'Workbook' || d.group === 'Dashboard') ? 24 : 16)
+        .attr('fill', d => {
+          if (d.group === 'Workbook' && d.action) {
+            return ACTION_COLORS[d.action] || COLOR_MAP['Workbook'];
+          }
+          return COLOR_MAP[d.group] || 'var(--text-muted)';
+        })
         .attr('stroke', 'var(--bg-surface)')
         .attr('stroke-width', 2.5)
         .style('cursor', 'grab');
@@ -124,10 +176,10 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
       node.append('text')
         .text(d => d.label)
         .attr('x', 0)
-        .attr('y', d => d.group === 'Dashboard' ? 36 : 28)
+        .attr('y', d => (d.group === 'Workbook' || d.group === 'Dashboard') ? 36 : 28)
         .attr('text-anchor', 'middle')
         .attr('font-size', '11px')
-        .attr('font-weight', d => d.group === 'Dashboard' ? 'bold' : '500')
+        .attr('font-weight', d => (d.group === 'Workbook' || d.group === 'Dashboard') ? 'bold' : '500')
         .attr('fill', 'var(--text-primary)')
         .style('pointer-events', 'none')
         .each(function(d) {
@@ -144,7 +196,8 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
       node.on('mouseover', (event, d) => {
         tooltipDiv.transition().duration(150).style('opacity', 1).style('display', 'block');
         const descHtml = d.definition ? `<div class="kpi-graph-tooltip-desc">${d.definition}</div>` : '';
-        tooltipDiv.html(`<div class="kpi-graph-tooltip-title">${d.group}: ${d.label}</div>${descHtml}`);
+        const actionHtml = d.action ? `<div class="kpi-graph-tooltip-desc">Action: ${d.action}${d.merge_with_name ? ` → retain ${d.merge_with_name}` : ''}</div>` : '';
+        tooltipDiv.html(`<div class="kpi-graph-tooltip-title">${d.group}: ${d.label}</div>${actionHtml}${descHtml}`);
       })
       .on('mousemove', (event) => {
         // Position relative to SVG container bounding box
@@ -244,22 +297,31 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
           nodes.forEach(n => { if (n.group === 'Table') highlightTargets.add(n.id); });
         } else if (type === 'user-group') {
           nodes.forEach(n => { if (n.group === 'User Group') highlightTargets.add(n.id); });
-        } else if (type === 'access-recency') {
-          nodes.forEach(n => { if (n.group === 'Access Recency') highlightTargets.add(n.id); });
-        } else if (type === 'common-kpi') {
-          // Highlight KPIs shared by 2 or more dashboards
-          nodes.forEach(n => {
-            if (n.group === 'KPI') {
-              const connectedDashes = links.filter(l => {
-                const sId = typeof l.source === 'object' ? l.source.id : l.source;
-                const tId = typeof l.target === 'object' ? l.target.id : l.target;
-                return (sId === n.id || tId === n.id);
-              });
-              if (connectedDashes.length > 1) {
-                highlightTargets.add(n.id);
+        } else if (type === 'upload-age') {
+          nodes.forEach(n => { if (n.group === 'Upload Age') highlightTargets.add(n.id); });
+        } else if (type === 'datasource') {
+          nodes.forEach(n => { if (n.group === 'Datasource') highlightTargets.add(n.id); });
+        } else if (type === 'common-kpi' || type === 'shared-kpi') {
+          if (view === 'rationalization') {
+            nodes.forEach(n => { if (n.group === 'Shared KPI') highlightTargets.add(n.id); });
+          } else {
+            nodes.forEach(n => {
+              if (n.group === 'KPI') {
+                const connectedDashes = links.filter(l => {
+                  const sId = typeof l.source === 'object' ? l.source.id : l.source;
+                  const tId = typeof l.target === 'object' ? l.target.id : l.target;
+                  return (sId === n.id || tId === n.id);
+                });
+                if (connectedDashes.length > 1) {
+                  highlightTargets.add(n.id);
+                }
               }
-            }
-          });
+            });
+          }
+        } else if (type === 'shared-source') {
+          nodes.forEach(n => { if (n.group === 'Shared Datasource' || n.group === 'Datasource') highlightTargets.add(n.id); });
+        } else if (type === 'workbook') {
+          nodes.forEach(n => { if (n.group === 'Workbook') highlightTargets.add(n.id); });
         }
 
         const connectedSet = new Set(highlightTargets);
@@ -293,14 +355,14 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
     return () => {
       if (simulation) simulation.stop();
     };
-  }, [dashboards]);
+  }, [graphParams]);
 
   // Fetch summary context from Gemini LLM
   useEffect(() => {
     const fetchSummary = async () => {
       setIsLoadingSummary(true);
       try {
-        const data = await api.getKpiGraphSummary(dashboards, activeHighlight || 'all');
+        const data = await api.getKpiGraphSummary(graphParams, activeHighlight || 'all');
         setAiSummary(data.summary);
       } catch (err) {
         console.error('Failed to fetch summary:', err);
@@ -311,7 +373,7 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
     };
     
     fetchSummary();
-  }, [dashboards, activeHighlight]);
+  }, [graphParams, activeHighlight]);
 
   const handleHighlightClick = (type) => {
     const nextHighlight = activeHighlight === type ? null : type;
@@ -326,41 +388,84 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
       {/* Toolbar / Filters */}
       <div className="kpi-graph-toolbar">
         <span className="kpi-graph-toolbar-title">Highlight Connections:</span>
-        <button
-          onClick={() => handleHighlightClick('common-kpi')}
-          className={`btn ${activeHighlight === 'common-kpi' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-        >
-          Shared KPIs
-        </button>
-        <button
-          onClick={() => handleHighlightClick('kpi')}
-          className={`btn ${activeHighlight === 'kpi' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-        >
-          KPI Nodes
-        </button>
-        <button
-          onClick={() => handleHighlightClick('tables')}
-          className={`btn ${activeHighlight === 'tables' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-        >
-          Tables
-        </button>
-        <button
-          onClick={() => handleHighlightClick('user-group')}
-          className={`btn ${activeHighlight === 'user-group' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-        >
-          User Group
-        </button>
-        <button
-          onClick={() => handleHighlightClick('access-recency')}
-          className={`btn ${activeHighlight === 'access-recency' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-        >
-          Upload Recency
-        </button>
+        {isRationalization ? (
+          <>
+            <button
+              onClick={() => handleHighlightClick('workbook')}
+              className={`btn ${activeHighlight === 'workbook' ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+            >
+              Workbooks
+            </button>
+            <button
+              onClick={() => handleHighlightClick('shared-kpi')}
+              className={`btn ${activeHighlight === 'shared-kpi' ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+            >
+              Shared KPIs
+            </button>
+            {presentGroups.has('Shared Datasource') && (
+              <button
+                onClick={() => handleHighlightClick('shared-source')}
+                className={`btn ${activeHighlight === 'shared-source' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+              >
+                Shared Sources
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => handleHighlightClick('common-kpi')}
+              className={`btn ${activeHighlight === 'common-kpi' ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+            >
+              Shared KPIs
+            </button>
+            <button
+              onClick={() => handleHighlightClick('kpi')}
+              className={`btn ${activeHighlight === 'kpi' ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+            >
+              KPI Nodes
+            </button>
+            <button
+              onClick={() => handleHighlightClick('tables')}
+              className={`btn ${activeHighlight === 'tables' ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+            >
+              Tables
+            </button>
+            {presentGroups.has('Datasource') && (
+              <button
+                onClick={() => handleHighlightClick('datasource')}
+                className={`btn ${activeHighlight === 'datasource' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+              >
+                Datasources
+              </button>
+            )}
+            {presentGroups.has('User Group') && (
+              <button
+                onClick={() => handleHighlightClick('user-group')}
+                className={`btn ${activeHighlight === 'user-group' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+              >
+                User Group
+              </button>
+            )}
+            {presentGroups.has('Upload Age') && (
+              <button
+                onClick={() => handleHighlightClick('upload-age')}
+                className={`btn ${activeHighlight === 'upload-age' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+              >
+                Upload Age
+              </button>
+            )}
+          </>
+        )}
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
           <button
@@ -405,7 +510,7 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
           {error && (
             <div style={{ position: 'absolute', inset: 0, background: 'var(--bg-glass)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, zIndex: 100, color: 'var(--accent-rose)' }}>
               <AlertCircle size={32} style={{ marginBottom: 12 }} />
-              <div style={{ fontWeight: 650 }}>Failed to Load Relational Graph</div>
+              <div style={{ fontWeight: 650 }}>Failed to Load Graph</div>
               <div className="text-secondary" style={{ fontSize: '0.85rem', marginTop: 4, textAlign: 'center' }}>{error}</div>
             </div>
           )}
@@ -416,34 +521,28 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
           <div className="kpi-graph-legend">
             <div className="kpi-graph-legend-title">Legend</div>
             <div className="kpi-graph-legend-grid">
-              <div className="kpi-graph-legend-item">
-                <div className="kpi-graph-legend-dot" style={{ background: COLOR_MAP['Dashboard'] }} />
-                <span className="kpi-graph-legend-label">Dashboard</span>
-              </div>
-              <div className="kpi-graph-legend-item">
-                <div className="kpi-graph-legend-dot" style={{ background: COLOR_MAP['KPI'] }} />
-                <span className="kpi-graph-legend-label">KPI</span>
-              </div>
-              <div className="kpi-graph-legend-item">
-                <div className="kpi-graph-legend-dot" style={{ background: COLOR_MAP['Business Area'] }} />
-                <span className="kpi-graph-legend-label">Business Area</span>
-              </div>
-              <div className="kpi-graph-legend-item">
-                <div className="kpi-graph-legend-dot" style={{ background: COLOR_MAP['User Group'] }} />
-                <span className="kpi-graph-legend-label">User Group</span>
-              </div>
-              <div className="kpi-graph-legend-item">
-                <div className="kpi-graph-legend-dot" style={{ background: COLOR_MAP['Table'] }} />
-                <span className="kpi-graph-legend-label">Table</span>
-              </div>
-              <div className="kpi-graph-legend-item">
-                <div className="kpi-graph-legend-dot" style={{ background: COLOR_MAP['Granularity Level'] }} />
-                <span className="kpi-graph-legend-label">Granularity</span>
-              </div>
-              <div className="kpi-graph-legend-item">
-                <div className="kpi-graph-legend-dot" style={{ background: COLOR_MAP['Access Recency'] }} />
-                <span className="kpi-graph-legend-label">Recency</span>
-              </div>
+              {LEGEND_ITEMS.filter(item => presentGroups.has(item.group)).map(item => (
+                <div key={item.group} className="kpi-graph-legend-item">
+                  <div className="kpi-graph-legend-dot" style={{ background: COLOR_MAP[item.group] }} />
+                  <span className="kpi-graph-legend-label">{item.label}</span>
+                </div>
+              ))}
+              {isRationalization && presentGroups.has('Workbook') && (
+                <>
+                  <div className="kpi-graph-legend-item">
+                    <div className="kpi-graph-legend-dot" style={{ background: ACTION_COLORS.keep }} />
+                    <span className="kpi-graph-legend-label">Keep</span>
+                  </div>
+                  <div className="kpi-graph-legend-item">
+                    <div className="kpi-graph-legend-dot" style={{ background: ACTION_COLORS.merge }} />
+                    <span className="kpi-graph-legend-label">Merge</span>
+                  </div>
+                  <div className="kpi-graph-legend-item">
+                    <div className="kpi-graph-legend-dot" style={{ background: ACTION_COLORS.decommission }} />
+                    <span className="kpi-graph-legend-label">Decommission</span>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -459,7 +558,7 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
                 <Sparkles size={16} />
               </div>
               <div style={{ fontSize: '0.85rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
-                Landscape Insights
+                {isRationalization ? 'Rationalization Insights' : 'Landscape Insights'}
               </div>
             </div>
 
@@ -483,6 +582,9 @@ export function KPIDashboardGraph({ dashboards, height = '600px', isMaximizedVie
         <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'var(--bg-base)', padding: '24px', display: 'flex', flexDirection: 'column' }}>
           <KPIDashboardGraph
             dashboards={dashboards}
+            workbookId={workbookId}
+            workbookIds={workbookIds}
+            view={view}
             height="100%"
             isMaximizedView={true}
             onMinimize={() => setIsMaximized(false)}

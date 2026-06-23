@@ -14,11 +14,11 @@ const EMPTY_METRICS = {
   mergeCount: null,
   decommissionCount: null,
   reviewCount: null,
-  riskCount: null,
+  agentStatus: null,
 };
 
 function aggregateMetrics(results) {
-  const [workbooks, datasources, dashboards, calcFields, kpiClusters, recommendations, risks] = results;
+  const [workbooks, datasources, dashboards, calcFields, kpiClusters, recommendations, agentsStatus] = results;
 
   const metrics = { ...EMPTY_METRICS };
 
@@ -60,9 +60,7 @@ function aggregateMetrics(results) {
     metrics.reviewCount = recs.filter(r => r.action === 'review').length;
   }
 
-  if (risks.status === 'fulfilled' && Array.isArray(risks.value)) {
-    metrics.riskCount = risks.value.length;
-  }
+  metrics.agentStatus = agentsStatus.status === 'fulfilled' ? agentsStatus.value : null;
 
   return metrics;
 }
@@ -81,7 +79,7 @@ export function useSidebarMetrics() {
         api.getCalculatedFields(),
         api.getKpiClusters(),
         api.getRecommendations(),
-        api.getRisks(),
+        api.getAgentsStatus(),
       ]);
       setMetrics(aggregateMetrics(results));
     } catch {

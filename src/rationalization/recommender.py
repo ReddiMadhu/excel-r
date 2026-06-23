@@ -159,6 +159,10 @@ class Recommender:
         if self.llm_caller:
             self._generate_llm_justifications(decisions, wb_map)
 
+        # ── Step 3b: Reconcile after LLM (overrides must not break pairs) ─
+        self._resolve_decommission_conflicts(decisions, wb_map)
+        self._normalize_decommission_rows(decisions, wb_map)
+
         # ── Step 4: Route unresolved ambiguous pairs to review ─
         for (id_a, id_b) in ambiguous_pairs:
             for wb_id in (id_a, id_b):
@@ -254,6 +258,7 @@ class Recommender:
             decisions[keeper_id]["action"] = "keep"
             decisions[keeper_id]["merge_with_name"] = None
             decisions[keeper_id]["merge_with_id"] = None
+            decisions[keeper_id]["_canonical_keeper"] = True
             decisions[keeper_id]["reasons"] = [
                 f"Retained as canonical workbook over '{decom_name}'."
             ]
@@ -266,6 +271,46 @@ class Recommender:
                 if "fingerprint" not in r.lower()
                 and "retained workbook" not in r.lower()
             ]
+
+    def _normalize_decommission_rows(
+        self,
+        decisions: Dict[int, Dict[str, Any]],
+        wb_map: Dict[int, Dict],
+    ) -> None:
+        """Ensure retain targets are keep, and every decommission has a merge target."""
+        retain_target_ids = {
+            d["merge_with_id"]
+            for d in decisions.values()
+            if d.get("action") == "decommission" and d.get("merge_with_id")
+        }
+
+        for target_id in retain_target_ids:
+            target = decisions.get(target_id)
+            if not target or target.get("action") != "decommission":
+                continue
+
+            decom_names = [
+                decisions[wid]["workbook_name"]
+                for wid, dec in decisions.items()
+                if dec.get("action") == "decommission" and dec.get("merge_with_id") == target_id
+            ]
+            target["action"] = "keep"
+            target["merge_with_name"] = None
+            target["merge_with_id"] = None
+            target["_canonical_keeper"] = True
+            target["reasons"] = [
+                f"Retained as canonical workbook over {', '.join(repr(n) for n in decom_names)}."
+            ]
+
+        for wb_id, decision in decisions.items():
+            if decision.get("action") != "decommission":
+                continue
+            if decision.get("merge_with_id"):
+                continue
+            decision["action"] = "review"
+            decision["reasons"].append(
+                "Decommission requires a retain target — manual review required."
+            )
 
     def _assess_ambiguous_pairs(
         self,
@@ -396,32 +441,42 @@ class Recommender:
                             if wb_map.get(wb_id, {}).get("name") == wb_name:
                                 decisions[wb_id]["llm_justification"] = item.get("justification", "")
 
-                                # Handle LLM override
+                                # Handle LLM override (never undo canonical retain decisions)
                                 final_action = item.get("final_action", action_group)
                                 if final_action != action_group and item.get("override_reason"):
-                                    decisions[wb_id]["action"] = final_action
-                                    decisions[wb_id]["llm_override"] = True
-                                    decisions[wb_id]["reasons"].append(
-                                        f"LLM override: {item['override_reason']}"
-                                    )
+                                    if decisions[wb_id].get("_canonical_keeper"):
+                                        decisions[wb_id]["reasons"].append(
+                                            f"LLM suggested {final_action} (not applied — canonical retain): "
+                                            f"{item['override_reason']}"
+                                        )
+                                    else:
+                                        decisions[wb_id]["action"] = final_action
+                                        decisions[wb_id]["llm_override"] = True
+                                        decisions[wb_id]["reasons"].append(
+                                            f"LLM override: {item['override_reason']}"
+                                        )
 
                                 # Update AI fields in dashboards
                                 ai_summary = item.get("ai_summary", "")
                                 domain = item.get("domain_classification", "")
                                 lob = item.get("line_of_business", "")
+                                user_groups = item.get("user_groups") or []
 
-                                if ai_summary or domain or lob:
+                                if ai_summary or domain or lob or user_groups:
                                     dashboards = self.db.query(
                                         "SELECT id FROM dashboards WHERE workbook_id = ? AND sheet_type = 'summary_report'",
                                         (wb_id,)
                                     )
                                     for dash in dashboards:
-                                        self.db.update("dashboards", {
+                                        patch = {
                                             "ai_summary": ai_summary,
                                             "domain_classification": domain,
                                             "line_of_business": lob,
                                             "is_real_ai": True,
-                                        }, "id = ?", (dash["id"],))
+                                        }
+                                        if user_groups:
+                                            patch["user_groups"] = user_groups
+                                        self.db.update("dashboards", patch, "id = ?", (dash["id"],))
 
                                 break
 

@@ -14,6 +14,12 @@ from typing import Any, Dict, List, Optional
 from src.server.models.database import Database
 from src.utils.validation import compute_comparison_readiness
 from src.utils.timing_log import PipelineTimer, log_step
+from src.utils.business_metadata import (
+    infer_business_metadata,
+    merge_business_metadata,
+    pick_primary_business_group,
+    pick_primary_lob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +54,19 @@ def load_workbook_json(
         sheets_data = output_json.get("sheets", [])
         readiness = output_json.get("comparison_readiness") or compute_comparison_readiness(output_json)
 
+        wb_lob, wb_domain, wb_groups = merge_business_metadata(
+            output_json.get("line_of_business", ""),
+            output_json.get("domain_classification", ""),
+            output_json.get("user_groups") or [],
+            infer_business_metadata(
+                output_json.get("purpose") or output_json.get("workbook_purpose", ""),
+                base_name,
+            ),
+        )
+        wb_lob = pick_primary_lob(wb_lob, output_json.get("purpose"), base_name) or ""
+        primary_business = pick_primary_business_group(wb_groups, output_json.get("purpose"), base_name)
+        wb_groups = [primary_business] if primary_business else []
+
         # Identify raw / summary sheet names
         raw_data_sheet_name = ""
         summary_sheet_name = ""
@@ -68,7 +87,7 @@ def load_workbook_json(
             "file_hash_md5": output_json.get("file_hash_md5", ""),
             "schema_version": output_json.get("schema_version", ""),
             "generated_at": output_json.get("generated_at", ""),
-            "purpose": output_json.get("workbook_purpose", ""),
+            "purpose": output_json.get("purpose") or output_json.get("workbook_purpose", ""),
             "sheet_count": len(sheets_data),
             "sheet_names": sheet_names_list,
             "has_vba_macros": metadata.get("has_vba_macros", False),
@@ -127,8 +146,19 @@ def load_workbook_json(
                 if isinstance(sheet.get("sheet_metadata"), dict) else "",
             "columns_list": all_col_names,
             "filters": sheet.get("filters", []),
-            "raw_metadata": sheet.get("sheet_metadata", {}),
+            "raw_metadata": {
+                **(sheet.get("sheet_metadata") or {}),
+                "pivot_tables": sheet.get("pivot_tables", []),
+            },
         }
+
+        if s_type == "summary_report" and (wb_lob or wb_domain or wb_groups):
+            if wb_lob:
+                dashboard_row["line_of_business"] = wb_lob
+            if wb_domain:
+                dashboard_row["domain_classification"] = wb_domain
+            if wb_groups:
+                dashboard_row["user_groups"] = _safe_json(wb_groups)
 
         dashboard_id = db.insert("dashboards", dashboard_row)
 

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Filter, Users, ChevronDown, RefreshCw } from 'lucide-react';
 import { api } from '../api/client';
 import { Loader } from '../components/shared';
+import PageHeader from '../components/layout/PageHeader';
 import { KPIDashboardGraph } from '../components/shared/KPIDashboardGraph';
 
 export default function LandscapeView() {
@@ -109,15 +110,11 @@ export default function LandscapeView() {
   return (
     <div className="page-enter" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Header and Global Filter Dropdowns */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
-          <h1>BI Landscape Graph</h1>
-          <p className="text-secondary" style={{ marginTop: '6px' }}>
-            Interactive D3 visualization of workbook lineage, calculation columns, and KPI relationships.
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', gap: '12px', position: 'relative' }}>
+      <PageHeader
+        title="BI Landscape Graph"
+        subtitle="Interactive D3 visualization of workbook lineage, calculation columns, and KPI relationships."
+        actions={(
+          <div style={{ display: 'flex', gap: '12px', position: 'relative' }}>
           {/* LOB Dropdown Filter */}
           <div style={{ position: 'relative' }}>
             <button
@@ -197,8 +194,8 @@ export default function LandscapeView() {
               </div>
             )}
           </div>
-        </div>
-      </div>
+        )}
+      />
 
       {/* Render the core D3 Graph view */}
       <div style={{ height: '650px', width: '100%' }}>

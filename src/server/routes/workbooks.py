@@ -112,6 +112,7 @@ async def get_workbook(workbook_id: int):
             ai_summary=d.get("ai_summary"),
             domain_classification=d.get("domain_classification"),
             line_of_business=d.get("line_of_business"),
+            user_groups=_parse_json_field(d.get("user_groups")),
             complexity_score=d.get("complexity_score"),
             is_real_ai=bool(d.get("is_real_ai", 0)),
         ))

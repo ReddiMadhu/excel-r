@@ -1,8 +1,9 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Table2, Code2, ExternalLink, EyeOff, Network } from 'lucide-react';
+import { ArrowLeft, Table2, Code2, ExternalLink, EyeOff } from 'lucide-react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
-import { Badge, Loader, KPIDashboardGraph } from '../components/shared';
+import { Loader } from '../components/shared';
+import PageHeader from '../components/layout/PageHeader';
 import { useState, Fragment } from 'react';
 import LineageGraph from '../components/detail/LineageGraph';
 
@@ -12,7 +13,6 @@ export default function WorkbookDetailView() {
   const { data: wb, loading } = useApi(() => api.getWorkbook(id), [id]);
   const { data: recs } = useApi(api.getRecommendations);
   const [activeSheet, setActiveSheet] = useState(null);
-  const [showGraph, setShowGraph] = useState(false);
 
   if (loading || !wb) return <Loader />;
 
@@ -24,16 +24,15 @@ export default function WorkbookDetailView() {
 
   return (
     <div className="page-enter">
-      <div style={{ marginBottom: 24 }}>
-        <button className="btn btn-ghost" onClick={() => navigate('/discovery')} style={{ marginBottom: 12 }}>
-          <ArrowLeft size={16} /> Back
-        </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <h1>{wb.name}</h1>
-          {displayAction && <Badge action={displayAction} />}
-        </div>
-        {wb.purpose && <p className="text-secondary" style={{ marginTop: 6 }}>{wb.purpose}</p>}
-      </div>
+      <PageHeader
+        title={wb.name}
+        subtitle={wb.purpose || undefined}
+        leading={(
+          <button className="btn btn-ghost" onClick={() => navigate('/discovery')} style={{ marginTop: 4, padding: '8px 10px' }}>
+            <ArrowLeft size={16} />
+          </button>
+        )}
+      />
 
       <div className="card" style={{ marginBottom: 24 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 20 }}>
@@ -42,26 +41,6 @@ export default function WorkbookDetailView() {
           <MetaItem label="Datasources" value={wb.datasource_count} />
           <MetaItem label="VBA Macros" value={wb.has_vba_macros ? 'Yes' : 'No'} highlight={wb.has_vba_macros} />
         </div>
-      </div>
-
-      <div className="card" style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showGraph ? 16 : 0 }}>
-          <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Network size={16} style={{ color: 'var(--accent-blue)' }} /> Relational Schema Graph
-          </h3>
-          <button
-            className="btn btn-ghost"
-            onClick={() => setShowGraph(!showGraph)}
-            style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-          >
-            {showGraph ? 'Hide Graph' : 'Show Graph'}
-          </button>
-        </div>
-        {showGraph && (
-          <div style={{ height: 420, marginTop: 12 }}>
-            <KPIDashboardGraph dashboards={dashboards.map(d => d.name).join(',')} height="100%" />
-          </div>
-        )}
       </div>
 
       {wb.external_links && wb.external_links.length > 0 && (

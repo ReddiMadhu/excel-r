@@ -1,6 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { getAgent } from '../config/agents';
-import AgentRunBanner from '../components/layout/AgentRunBanner';
 
 export default function AgentWorkspaceView({ agentId }) {
   const agent = getAgent(agentId);
@@ -15,18 +14,16 @@ export default function AgentWorkspaceView({ agentId }) {
 
   const ActiveComponent = activeTab.Component;
   const showTabs = agent.tabs.length > 1;
-  const showRunBanner = agentId === 'intelligence' || agentId === 'rationalization';
 
   return (
     <div className="agent-workspace">
-      {showRunBanner && <AgentRunBanner agentId={agentId} />}
       {showTabs && (
         <div className="workspace-tabs">
           {agent.tabs.map(tab => (
             <NavLink
               key={tab.id}
               to={tab.path}
-              end
+              end={tab.path === agent.path}
               className={({ isActive }) => `workspace-tab ${isActive ? 'active' : ''}`}
             >
               {tab.label}

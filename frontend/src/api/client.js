@@ -43,6 +43,9 @@ export const api = {
   getDatasources: () => fetchJson('/api/datasources'),
   getKpiClusters: () => fetchJson('/api/kpi-clusters'),
 
+  // Discovery
+  getBusinessCatalog: () => fetchJson('/api/discovery/business-catalog'),
+
   // Governance
   getRecommendations: () => fetchJson('/api/governance/recommendations'),
   getReviewQueue: () => fetchJson('/api/governance/review'),
@@ -56,8 +59,24 @@ export const api = {
   runRationalization: () => fetchJson('/api/agents/rationalization/run', { method: 'POST' }),
 
   // KPI Graph
-  getKpiGraphData: (dashboards) => 
-    fetchJson(`/api/kpi-graph/data${dashboards ? '?dashboards=' + encodeURIComponent(dashboards) : ''}`),
-  getKpiGraphSummary: (dashboards, focusType = 'all') => 
-    fetchJson(`/api/kpi-graph/summary?focus_type=${focusType}${dashboards ? '&dashboards=' + encodeURIComponent(dashboards) : ''}`),
+  getKpiGraphData: (arg) => {
+    const opts = typeof arg === 'string' ? { dashboards: arg } : (arg || {});
+    const params = new URLSearchParams();
+    if (opts.dashboards) params.set('dashboards', opts.dashboards);
+    if (opts.workbookId != null) params.set('workbook_id', String(opts.workbookId));
+    if (opts.workbookIds?.length) params.set('workbook_ids', opts.workbookIds.join(','));
+    if (opts.view) params.set('view', opts.view);
+    const qs = params.toString();
+    return fetchJson(`/api/kpi-graph/data${qs ? '?' + qs : ''}`);
+  },
+  getKpiGraphSummary: (arg, focusType = 'all') => {
+    const opts = typeof arg === 'string' ? { dashboards: arg, focusType } : { focusType, ...(arg || {}) };
+    const params = new URLSearchParams({ focus_type: opts.focusType || 'all' });
+    if (opts.dashboards) params.set('dashboards', opts.dashboards);
+    if (opts.workbookId != null) params.set('workbook_id', String(opts.workbookId));
+    if (opts.workbookIds?.length) params.set('workbook_ids', opts.workbookIds.join(','));
+    if (opts.view) params.set('view', opts.view);
+    const qs = params.toString();
+    return fetchJson(`/api/kpi-graph/summary?${qs}`);
+  },
 };

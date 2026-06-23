@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Clock, X } from 'lucide-react';
 import { api } from '../api/client';
+import PageHeader from '../components/layout/PageHeader';
 
 export default function UploadView() {
   const [isDragging, setIsDragging] = useState(false);
@@ -51,10 +52,10 @@ export default function UploadView() {
   return (
     <div className="page-enter">
       <div className="animate-fade-in">
-        <h1 style={{ marginBottom: 12 }}>Upload Workbooks</h1>
-        <p className="text-secondary" style={{ marginBottom: 16, fontSize: '0.9rem' }}>
-          Upload runs <strong>BI Discovery</strong> only (fast extraction). Run Intelligence and Rationalization from their sidebar agents when you are ready.
-        </p>
+        <PageHeader
+          title="Upload Workbooks"
+          subtitle="Upload runs BI Discovery only (fast extraction). Run Intelligence and Rationalization from their sidebar agents when you are ready."
+        />
 
         <div className="upload-pipeline">
           <div className="upload-pipeline-step">

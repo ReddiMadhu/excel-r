@@ -60,6 +60,7 @@ async def list_dashboards():
             ai_summary=r.get("ai_summary"),
             domain_classification=r.get("domain_classification"),
             line_of_business=r.get("line_of_business"),
+            user_groups=_pj(r.get("user_groups")),
             complexity_score=r.get("complexity_score"),
             is_real_ai=bool(r.get("is_real_ai", 0)),
         )
@@ -107,6 +108,8 @@ async def get_dashboard(dashboard_id: int):
             dimensions=_pj(ws.get("dimensions")),
             mark_type=ws.get("mark_type", "table"),
             summary_rows=_pj(ws.get("summary_rows")),
+            pivot_configuration=_pj(ws.get("pivot_configuration")),
+            inter_table_relationships=_pj(ws.get("inter_table_relationships")),
         )
         for ws in worksheets
     ]

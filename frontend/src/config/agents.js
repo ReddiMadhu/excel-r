@@ -1,10 +1,8 @@
 import { Search, Brain, GitCompare } from 'lucide-react';
 import PortfolioView from '../views/PortfolioView';
+import WorkbookInsightsView from '../views/WorkbookInsightsView';
 import KpiExplorerView from '../views/KpiExplorerView';
-import LandscapeView from '../views/LandscapeView';
-import TableCatalogView from '../views/TableCatalogView';
 import RationalizationView from '../views/RationalizationView';
-import RiskDashboardView from '../views/RiskDashboardView';
 
 export const agents = [
   {
@@ -26,21 +24,20 @@ export const agents = [
   },
   {
     id: 'intelligence',
-    path: '/intelligence/kpi',
+    path: '/intelligence',
     label: 'BI Intelligence',
     icon: Brain,
-    description: 'KPI insights, dataset relationships, formula analysis',
+    description: 'Business summaries, shared metrics, and sheet context',
     routes: ['/intelligence'],
     tabs: [
-      { id: 'kpi', label: 'KPI Explorer', path: '/intelligence/kpi', Component: KpiExplorerView },
-      { id: 'tables', label: 'Table Catalog', path: '/intelligence/tables', Component: TableCatalogView },
-      { id: 'landscape', label: 'Landscape Graph', path: '/intelligence/landscape', Component: LandscapeView },
+      { id: 'insights', label: 'Workbook Guide', path: '/intelligence', Component: WorkbookInsightsView },
+      { id: 'metrics', label: 'Shared Metrics', path: '/intelligence/metrics', Component: KpiExplorerView },
     ],
     metrics: (m) => [
-      { label: 'KPI Clusters', value: m.kpiClusterCount },
-      { label: 'Calc Fields', value: m.calcFieldCount },
-      { label: 'Shared KPIs', value: m.sharedKpiCount },
-      { label: 'AI Summaries', value: m.aiSummaryCount },
+      { label: 'Summaries', value: m.aiSummaryCount },
+      { label: 'Metric Groups', value: m.kpiClusterCount },
+      { label: 'Shared Metrics', value: m.sharedKpiCount },
+      { label: 'Columns', value: m.calcFieldCount },
     ],
   },
   {
@@ -52,13 +49,12 @@ export const agents = [
     routes: ['/rationalization'],
     tabs: [
       { id: 'results', label: 'Rationalization', path: '/rationalization', Component: RationalizationView },
-      { id: 'risks', label: 'Risk Dashboard', path: '/rationalization/risks', Component: RiskDashboardView },
     ],
     metrics: (m) => [
       { label: 'Keep', value: m.keepCount },
       { label: 'Merge', value: m.mergeCount },
       { label: 'Decommission', value: m.decommissionCount },
-      { label: 'Risks', value: m.riskCount },
+      { label: 'Review', value: m.reviewCount },
     ],
   },
 ];
@@ -70,7 +66,11 @@ export function getAgent(agentId) {
 export function getAgentByPath(pathname) {
   return agents.find(a =>
     a.routes.some(route => {
-      if (route === '/discovery') return pathname === '/discovery' || pathname.startsWith('/workbooks');
+      if (route === '/discovery') {
+        return pathname === '/discovery'
+          || pathname.startsWith('/discovery/')
+          || pathname.startsWith('/workbooks');
+      }
       return pathname === route || pathname.startsWith(route + '/');
     })
   );
