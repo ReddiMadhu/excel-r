@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle, GitMerge, Trash2, AlertCircle, Search,
   ChevronRight, X, ArrowRight, TrendingUp, Sparkles,
@@ -7,20 +8,16 @@ import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
 import { StatCard, Loader, EmptyState } from '../components/shared';
 import PageHeader from '../components/layout/PageHeader';
-import { KPIDashboardGraph } from '../components/shared/KPIDashboardGraph';
 
 export default function RationalizationView() {
   const { data: recs, loading } = useApi(api.getRecommendations);
   const { data: pairwise, loading: pwLoading } = useApi(api.getPairwiseMatrix);
+  const navigate = useNavigate();
 
   // Filter state
   const [activeTab, setActiveTab] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedWorkbook, setSelectedWorkbook] = useState('all');
-
-  // Modal state
-  const [mergeModalItem, setMergeModalItem] = useState(null);
-  const [decommissionModalItem, setDecommissionModalItem] = useState(null);
 
   // Heatmap collapse
   const [heatmapOpen, setHeatmapOpen] = useState(false);
@@ -42,10 +39,10 @@ export default function RationalizationView() {
     return Array.from(names).sort();
   }, [recs]);
 
-  const workbookIds = useMemo(
-    () => (pairwise?.workbooks || []).map(w => w.id),
-    [pairwise]
-  );
+  // Navigate to review detail page
+  const goToReview = (rec, type) => {
+    navigate(`/rationalization/review/${type}/${rec.workbook_id || rec.id}`);
+  };
 
   // Decommission pairs logic
   const decommissionRecs = useMemo(
@@ -109,12 +106,7 @@ export default function RationalizationView() {
     [recs, searchTerm, selectedWorkbook]
   );
 
-  // Find matching merge target for modal
-  const mergeTarget = useMemo(() => {
-    if (!mergeModalItem || !recs) return null;
-    return recs.find(r => r.workbook_name === mergeModalItem.merge_with_name)
-      || recs.find(r => r.workbook_id === mergeModalItem.merge_with_id);
-  }, [mergeModalItem, recs]);
+
 
   if (loading) return <Loader />;
 
@@ -202,18 +194,6 @@ export default function RationalizationView() {
             </div>
           </div>
 
-          {/* ── Relationship Graph ──────────────────────────── */}
-          {workbookIds.length > 1 && (
-            <div className="card compact-card" style={{ marginBottom: 12 }}>
-              <KPIDashboardGraph
-                view="rationalization"
-                workbookIds={workbookIds}
-                height="520px"
-                filterAction={activeTab !== 'all' ? activeTab : null}
-                title="Workbook Relationship Map"
-              />
-            </div>
-          )}
 
           {/* ── Recommendation Cards Grid ──────────────────── */}
           {activeTab === 'all' ? (
@@ -228,7 +208,7 @@ export default function RationalizationView() {
                   badgeText="Redundant"
                 />
                 {mergeRecs.length > 0 ? mergeRecs.map(rec => (
-                  <RecCard key={rec.id} rec={rec} type="merge" onReview={() => setMergeModalItem(rec)} />
+                  <RecCard key={rec.id} rec={rec} type="merge" onReview={() => goToReview(rec, 'merge')} />
                 )) : <div className="ration-empty">No merge recommendations</div>}
               </div>
 
@@ -242,7 +222,7 @@ export default function RationalizationView() {
                   badgeText="Inactive"
                 />
                 {decommissionFiltered.length > 0 ? decommissionFiltered.map(rec => (
-                  <RecCard key={rec.id} rec={rec} type="decommission" onReview={() => setDecommissionModalItem(rec)} />
+                  <RecCard key={rec.id} rec={rec} type="decommission" onReview={() => goToReview(rec, 'decommission')} />
                 )) : <div className="ration-empty">No decommission recommendations</div>}
               </div>
 
@@ -256,7 +236,7 @@ export default function RationalizationView() {
                   badgeText="Active"
                 />
                 {keepRecs.length > 0 ? keepRecs.map(rec => (
-                  <RecCard key={rec.id} rec={rec} type="keep" />
+                  <RecCard key={rec.id} rec={rec} type="keep" onReview={() => goToReview(rec, 'keep')} />
                 )) : <div className="ration-empty">No keep recommendations</div>}
               </div>
             </div>
@@ -266,7 +246,7 @@ export default function RationalizationView() {
                 <div className="ration-column">
                   <ColumnHeader label="CONSOLIDATE & MERGE" color="var(--accent-amber)" count={mergeRecs.length} badge="merge" badgeText="Redundant" />
                   {mergeRecs.length > 0 ? mergeRecs.map(rec => (
-                    <RecCard key={rec.id} rec={rec} type="merge" onReview={() => setMergeModalItem(rec)} />
+                    <RecCard key={rec.id} rec={rec} type="merge" onReview={() => goToReview(rec, 'merge')} />
                   )) : <div className="ration-empty">No merge recommendations</div>}
                 </div>
               )}
@@ -274,7 +254,7 @@ export default function RationalizationView() {
                 <div className="ration-column">
                   <ColumnHeader label="DECOMMISSION" color="var(--accent-rose)" count={decommissionFiltered.length} badge="decommission" badgeText="Inactive" />
                   {decommissionFiltered.length > 0 ? decommissionFiltered.map(rec => (
-                    <RecCard key={rec.id} rec={rec} type="decommission" onReview={() => setDecommissionModalItem(rec)} />
+                    <RecCard key={rec.id} rec={rec} type="decommission" onReview={() => goToReview(rec, 'decommission')} />
                   )) : <div className="ration-empty">No decommission recommendations</div>}
                 </div>
               )}
@@ -282,7 +262,7 @@ export default function RationalizationView() {
                 <div className="ration-column">
                   <ColumnHeader label="KEEP & CERTIFY" color="var(--accent-emerald)" count={keepRecs.length} badge="keep" badgeText="Active" />
                   {keepRecs.length > 0 ? keepRecs.map(rec => (
-                    <RecCard key={rec.id} rec={rec} type="keep" />
+                    <RecCard key={rec.id} rec={rec} type="keep" onReview={() => goToReview(rec, 'keep')} />
                   )) : <div className="ration-empty">No keep recommendations</div>}
                 </div>
               )}
@@ -326,22 +306,7 @@ export default function RationalizationView() {
         </div>
       )}
 
-      {/* ── Merge Review Modal ──────────────────────────────── */}
-      {mergeModalItem && (
-        <MergeReviewModal
-          rec={mergeModalItem}
-          target={mergeTarget}
-          onClose={() => setMergeModalItem(null)}
-        />
-      )}
 
-      {/* ── Decommission Review Modal ──────────────────────── */}
-      {decommissionModalItem && (
-        <DecommissionReviewModal
-          rec={decommissionModalItem}
-          onClose={() => setDecommissionModalItem(null)}
-        />
-      )}
     </div>
   );
 }
@@ -472,414 +437,34 @@ function RecCard({ rec, type, onReview }) {
       )}
 
       {/* Footer with Review Button */}
-      {(type === 'merge' || type === 'decommission') && (
-        <div className="rec-card-footer">
-          <div className="rec-card-merge-target">
-            {type === 'merge' && rec.merge_with_name && (
-              <>
-                <GitMerge size={13} />
-                <span title={`Merge into '${rec.merge_with_name}'`}>
-                  Merge into &lsquo;{rec.merge_with_name}&rsquo;
-                </span>
-              </>
-            )}
-            {type === 'decommission' && rec.merge_with_name && (
-              <>
-                <ArrowRight size={13} />
-                <span title={`Retain '${rec.merge_with_name}'`}>
-                  Retain &lsquo;{rec.merge_with_name}&rsquo;
-                </span>
-              </>
-            )}
-          </div>
-          <button className={`btn-review ${type}`} onClick={onReview}>
-            Review Details <ArrowRight size={13} />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ── Merge Review Modal ──────────────────────────────────── */
-function MergeReviewModal({ rec, target, onClose }) {
-  const reasons = cleanReasons(rec.reasons);
-  const commonKpis = new Set(rec.common_kpis || []);
-
-  return (
-    <div className="review-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="review-modal">
-        {/* Header */}
-        <div className="review-modal-header">
-          <div className="review-modal-header-left">
-            <div className="review-modal-icon merge">
-              <GitMerge size={22} />
-            </div>
-            <div>
-              <div className="review-modal-title">Consolidation Merger Review</div>
-              <div className="review-modal-subtitle">
-                Compare metrics, data sources, and KPIs side-by-side to review consolidating these workbooks.
-              </div>
-            </div>
-          </div>
-          <button className="review-modal-close" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="review-modal-body">
-          {/* Side-by-side comparison */}
-          <div className="review-comparison">
-            {/* Source Column */}
-            <div className="review-col">
-              <div>
-                <div className="review-col-label source">Source — Merge Candidate</div>
-                <div className="review-col-name">{rec.workbook_name}</div>
-              </div>
-
-              {/* Scores */}
-              <div>
-                <div className="review-section-title">Overlap Scores</div>
-                <div className="rec-card-scores">
-                  <div className="rec-score-item">
-                    <span className="rec-score-label">KPI:</span>
-                    <span className="rec-score-value" style={{ color: 'var(--accent-amber)' }}>
-                      {((rec.kpi_overlap_score || 0) * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                  <div className="rec-score-item">
-                    <span className="rec-score-label">DS:</span>
-                    <span className="rec-score-value" style={{ color: 'var(--accent-amber)' }}>
-                      {((rec.datasource_overlap_score || 0) * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                  <div className="rec-score-item">
-                    <span className="rec-score-label">Unique:</span>
-                    <span className="rec-score-value">
-                      {((rec.uniqueness_score || 0) * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Common KPIs */}
-              {rec.common_kpis && rec.common_kpis.length > 0 && (
-                <div>
-                  <div className="review-section-title">Shared KPIs</div>
-                  <div className="review-kpi-list">
-                    {rec.common_kpis.map((k, i) => (
-                      <div key={i} className="review-kpi-item shared">
-                        <span>{k}</span>
-                        <span className="shared-badge" style={{
-                          fontSize: '0.6rem', fontWeight: 700, padding: '1px 6px',
-                          borderRadius: 100, background: 'rgba(245, 158, 11, 0.12)',
-                          color: 'var(--accent-amber)'
-                        }}>SHARED</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Rationale */}
-              {reasons.length > 0 && (
-                <div>
-                  <div className="review-section-title">Governance Rationale</div>
-                  <div className="review-rationale-box">
-                    <ul>
-                      {reasons.map((r, i) => (
-                        <li key={i}>
-                          <span style={{ color: 'var(--accent-amber)', fontWeight: 700 }}>!</span>
-                          <span>{r}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Target Column */}
-            <div className="review-col">
-              <div>
-                <div className="review-col-label target">Target — Consolidation Destination</div>
-                <div className="review-col-name">{rec.merge_with_name || '—'}</div>
-              </div>
-
-              {target && (
-                <>
-                  <div>
-                    <div className="review-section-title">Overlap Scores</div>
-                    <div className="rec-card-scores">
-                      <div className="rec-score-item">
-                        <span className="rec-score-label">KPI:</span>
-                        <span className="rec-score-value" style={{ color: 'var(--accent-emerald)' }}>
-                          {((target.kpi_overlap_score || 0) * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                      <div className="rec-score-item">
-                        <span className="rec-score-label">DS:</span>
-                        <span className="rec-score-value" style={{ color: 'var(--accent-emerald)' }}>
-                          {((target.datasource_overlap_score || 0) * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                      <div className="rec-score-item">
-                        <span className="rec-score-label">Unique:</span>
-                        <span className="rec-score-value">
-                          {((target.uniqueness_score || 0) * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {target.common_kpis && target.common_kpis.length > 0 && (
-                    <div>
-                      <div className="review-section-title">Its KPIs</div>
-                      <div className="review-kpi-list">
-                        {target.common_kpis.map((k, i) => {
-                          const isShared = commonKpis.has(k);
-                          return (
-                            <div key={i} className={`review-kpi-item ${isShared ? 'shared' : ''}`}>
-                              <span>{k}</span>
-                              {isShared && (
-                                <span className="shared-badge" style={{
-                                  fontSize: '0.6rem', fontWeight: 700, padding: '1px 6px',
-                                  borderRadius: 100, background: 'rgba(245, 158, 11, 0.12)',
-                                  color: 'var(--accent-amber)'
-                                }}>SHARED</span>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {cleanReasons(target.reasons).length > 0 && (
-                    <div>
-                      <div className="review-section-title">Target Rationale</div>
-                      <div className="review-rationale-box">
-                        <ul>
-                          {cleanReasons(target.reasons).map((r, i) => (
-                            <li key={i}>
-                              <span style={{ color: 'var(--accent-emerald)', fontWeight: 700 }}>✓</span>
-                              <span>{r}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {!target && (
-                <div className="ration-empty" style={{ marginTop: 12 }}>
-                  Target workbook details not available in current recommendations.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Lineage graph */}
-          {rec.workbook_id && rec.merge_with_id && (
-            <div className="review-graph-section">
-              <div className="review-graph-section-header">
-                <div className="review-graph-section-title" style={{ color: 'var(--accent-amber)' }}>
-                  <TrendingUp size={16} />
-                  Visual Lineage & Common Connections
-                </div>
-              </div>
-              <div className="review-graph-wrapper">
-                <KPIDashboardGraph
-                  view="rationalization"
-                  workbookIds={[rec.workbook_id, rec.merge_with_id]}
-                  height="340px"
-                />
-              </div>
-            </div>
+      <div className="rec-card-footer">
+        <div className="rec-card-merge-target">
+          {type === 'merge' && rec.merge_with_name && (
+            <>
+              <GitMerge size={13} />
+              <span title={`Merge into '${rec.merge_with_name}'`}>
+                Merge into &lsquo;{rec.merge_with_name}&rsquo;
+              </span>
+            </>
+          )}
+          {type === 'decommission' && rec.merge_with_name && (
+            <>
+              <ArrowRight size={13} />
+              <span title={`Retain '${rec.merge_with_name}'`}>
+                Retain &lsquo;{rec.merge_with_name}&rsquo;
+              </span>
+            </>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="review-modal-footer">
-          <div className="review-footer-info" style={{ color: 'var(--accent-amber)' }}>
-            <TrendingUp size={14} />
-            Consolidating reduces redundant workbook maintenance
-          </div>
-          <div className="review-footer-actions">
-            <button className="btn-cancel" onClick={onClose}>Cancel</button>
-            <button className="btn-apply merge">Apply Merger</button>
-          </div>
-        </div>
+        <button className={`btn-review ${type}`} onClick={onReview}>
+          View Details <ArrowRight size={13} />
+        </button>
       </div>
     </div>
   );
 }
 
-/* ── Decommission Review Modal ───────────────────────────── */
-function DecommissionReviewModal({ rec, onClose }) {
-  const reasons = cleanReasons(rec.reasons);
 
-  return (
-    <div className="review-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="review-modal">
-        {/* Header */}
-        <div className="review-modal-header">
-          <div className="review-modal-header-left">
-            <div className="review-modal-icon decommission">
-              <Trash2 size={22} />
-            </div>
-            <div>
-              <div className="review-modal-title">Decommission Governance Review</div>
-              <div className="review-modal-subtitle">
-                Review KPIs, governance rationale, and lineage connections before decommissioning.
-              </div>
-            </div>
-          </div>
-          <button className="review-modal-close" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="review-modal-body">
-          <div className="review-comparison">
-            {/* Workbook Details */}
-            <div className="review-col">
-              <div>
-                <div className="review-col-label decommission">Decommission Candidate</div>
-                <div className="review-col-name">{rec.workbook_name}</div>
-              </div>
-
-              <div>
-                <div className="review-section-title">Overlap Scores</div>
-                <div className="rec-card-scores">
-                  <div className="rec-score-item">
-                    <span className="rec-score-label">KPI Overlap:</span>
-                    <span className="rec-score-value" style={{ color: 'var(--accent-rose)' }}>
-                      {((rec.kpi_overlap_score || 0) * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                  <div className="rec-score-item">
-                    <span className="rec-score-label">DS Overlap:</span>
-                    <span className="rec-score-value" style={{ color: 'var(--accent-rose)' }}>
-                      {((rec.datasource_overlap_score || 0) * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                  <div className="rec-score-item">
-                    <span className="rec-score-label">Uniqueness:</span>
-                    <span className="rec-score-value">
-                      {((rec.uniqueness_score || 0) * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {rec.common_kpis && rec.common_kpis.length > 0 && (
-                <div>
-                  <div className="review-section-title">KPIs in This Workbook</div>
-                  <div className="review-kpi-list">
-                    {rec.common_kpis.map((k, i) => (
-                      <div key={i} className="review-kpi-item">
-                        <span>{k}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {rec.merge_with_name && (
-                <div style={{
-                  padding: 12, borderRadius: 8,
-                  background: 'var(--status-keep-bg)',
-                  border: '1px solid var(--accent-emerald)',
-                }}>
-                  <div className="review-section-title" style={{ color: 'var(--accent-emerald)' }}>
-                    Retain Target
-                  </div>
-                  <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
-                    {rec.merge_with_name}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Rationale Column */}
-            <div className="review-col">
-              <div>
-                <div className="review-col-label rationale">Governance Rationale</div>
-                <div className="review-col-name" style={{ fontSize: '0.95rem' }}>Why Decommission?</div>
-              </div>
-
-              {rec.llm_justification && (
-                <div className="rec-card-ai">
-                  <Sparkles size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
-                  {rec.llm_justification}
-                </div>
-              )}
-
-              {reasons.length > 0 && (
-                <div>
-                  <div className="review-section-title">Platform Cleanliness Violations</div>
-                  <div className="review-rationale-box">
-                    <ul>
-                      {reasons.map((r, i) => (
-                        <li key={i}>
-                          <span style={{ color: 'var(--accent-rose)', fontWeight: 700 }}>▲</span>
-                          <span>{r}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              )}
-
-              <div className="review-impact-alert decommission">
-                <strong>Governance Impact Alert:</strong> This action will archive the workbook metadata,
-                disconnect datasource references, and flag it in the repository index for cleanup.
-              </div>
-            </div>
-          </div>
-
-          {/* Lineage graph */}
-          {rec.workbook_id && (
-            <div className="review-graph-section">
-              <div className="review-graph-section-header">
-                <div className="review-graph-section-title" style={{ color: 'var(--accent-rose)' }}>
-                  <TrendingUp size={16} />
-                  Workbook Connections Lineage
-                </div>
-              </div>
-              <div className="review-graph-wrapper">
-                <KPIDashboardGraph
-                  view="rationalization"
-                  workbookIds={rec.merge_with_id
-                    ? [rec.workbook_id, rec.merge_with_id]
-                    : [rec.workbook_id]
-                  }
-                  height="340px"
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="review-modal-footer">
-          <div className="review-footer-info" style={{ color: 'var(--accent-rose)' }}>
-            Archiving this workbook frees up resources and reduces portfolio clutter
-          </div>
-          <div className="review-footer-actions">
-            <button className="btn-cancel" onClick={onClose}>Cancel</button>
-            <button className="btn-apply decommission">Apply Decommission</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* ── Heatmap Component ───────────────────────────────────── */
 function OverlapHeatmap({ workbooks, pairs }) {

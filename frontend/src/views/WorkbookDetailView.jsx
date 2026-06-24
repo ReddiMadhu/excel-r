@@ -1,11 +1,17 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Table2, Code2, ExternalLink, EyeOff } from 'lucide-react';
+import { ArrowLeft, Table2, Code2, ExternalLink, EyeOff, Filter, LayoutGrid, Link2 } from 'lucide-react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
 import { Loader } from '../components/shared';
 import PageHeader from '../components/layout/PageHeader';
-import { useState, Fragment } from 'react';
+import { useState, Fragment, useMemo } from 'react';
 import LineageGraph from '../components/detail/LineageGraph';
+import {
+  describeActiveFilters,
+  parsePivotLayouts,
+  describePivotLayout,
+  describeRelationships,
+} from '../utils/businessContext';
 
 export default function WorkbookDetailView() {
   const { id } = useParams();
@@ -156,15 +162,28 @@ function SheetDetail({ sheet }) {
   const [selectedTableId, setSelectedTableId] = useState(null);
   const [expandedSummaryRow, setExpandedSummaryRow] = useState(null);
 
+  const filters = describeActiveFilters(detail?.filters);
+  const pivots = useMemo(() => {
+    if (!detail) return [];
+    const fromMeta = parsePivotLayouts(detail.raw_metadata?.pivot_tables);
+    const fromTables = (detail.worksheets || []).flatMap(ws => parsePivotLayouts(ws.pivot_configuration));
+    return fromMeta.length ? fromMeta : fromTables;
+  }, [detail]);
+  const relationships = useMemo(() => {
+    if (!detail?.worksheets) return [];
+    return detail.worksheets.flatMap(ws => describeRelationships(ws.inter_table_relationships));
+  }, [detail]);
+
   if (loading) return <Loader />;
   if (!detail) return null;
 
   const cols = detail.columns || [];
   const worksheets = detail.worksheets || [];
-  const selectedTable = worksheets.find(ws => ws.id === selectedTableId) || null;
+  const activeTableId = selectedTableId !== null ? selectedTableId : (worksheets[0]?.id || null);
+  const selectedTable = worksheets.find(ws => ws.id === activeTableId) || null;
   const displayCols = selectedTable
     ? cols.filter(col => col.table_name === selectedTable.name)
-    : cols;
+    : [];
 
   return (
     <div className="card">
@@ -198,19 +217,61 @@ function SheetDetail({ sheet }) {
         </div>
       )}
 
+      {filters && filters.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <p className="text-muted" style={{ fontSize: '0.75rem', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+            <Filter size={13} style={{ color: 'var(--accent-blue)' }} /> Active Filters
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            {filters.map((f, i) => (
+              <li key={i} style={{ marginBottom: 4 }}>{f.text}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {pivots.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <p className="text-muted" style={{ fontSize: '0.75rem', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+            <LayoutGrid size={13} style={{ color: 'var(--accent-blue)' }} /> Report Organization (Pivots)
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {pivots.map((pivot, i) => (
+              <div key={i} style={{ background: 'var(--bg-surface)', padding: 10, borderRadius: 6, border: '1px solid var(--glass-border)' }}>
+                <div style={{ fontWeight: 600, fontSize: '0.8rem', marginBottom: 4 }}>{pivot.name}</div>
+                <p className="text-secondary" style={{ fontSize: '0.8rem', margin: 0 }}>{describePivotLayout(pivot)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {relationships.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <p className="text-muted" style={{ fontSize: '0.75rem', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+            <Link2 size={13} style={{ color: 'var(--accent-blue)' }} /> Table Connections
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            {relationships.map((rel, i) => (
+              <li key={i} style={{ marginBottom: 4 }}>{rel}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {worksheets.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           <h4 className="section-title" style={{ marginBottom: 8 }}>Tables</h4>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {worksheets.map(ws => {
-              const isActive = selectedTableId === ws.id;
+              const isActive = activeTableId === ws.id;
               return (
                 <button
                   key={ws.id}
                   type="button"
                   className={`badge badge-blue ${isActive ? 'active' : ''}`}
                   onClick={() => {
-                    setSelectedTableId(isActive ? null : ws.id);
+                    setSelectedTableId(ws.id);
                     setExpandedSummaryRow(null);
                     setSelectedCol(null);
                   }}
@@ -339,7 +400,9 @@ function SheetDetail({ sheet }) {
                         <td style={{ fontWeight: 500 }}>{col.column_name}</td>
                         <td>
                           <span className={`badge ${col.column_type === 'formula_based' ? 'badge-purple' : 'badge-blue'}`}>
-                            {col.column_type || 'data'}
+                            {['raw', 'label'].includes(col.column_type)
+                              ? (col.data_type || col.column_type)
+                              : (col.column_type || 'data')}
                           </span>
                         </td>
                         <td className="text-muted" style={{ fontSize: '0.8rem', maxWidth: 200 }}>{col.definition || '—'}</td>
@@ -413,59 +476,6 @@ function SheetDetail({ sheet }) {
         </div>
       )}
 
-      {displayCols.length > 0 && !selectedTable && (
-        <div>
-          <div className="section-title" style={{ marginBottom: 8, fontSize: '0.75rem', fontWeight: 600 }}>Sheet Columns (Click row to view lineage graph)</div>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Column</th>
-                  <th>Type</th>
-                  <th>Data Type</th>
-                  <th>Formula</th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayCols.map(col => {
-                  const isSelected = selectedCol?.id === col.id;
-                  return (
-                    <tr
-                      key={col.id}
-                      onClick={() => setSelectedCol(isSelected ? null : col)}
-                      style={{ cursor: 'pointer' }}
-                      className={isSelected ? 'active' : ''}
-                    >
-                      <td style={{ fontWeight: 500 }}>{col.column_name}</td>
-                      <td>
-                        <span className={`badge ${col.column_type === 'formula_based' ? 'badge-purple' : 'badge-blue'}`}>
-                          {col.column_type || 'data'}
-                        </span>
-                      </td>
-                      <td className="text-muted">{col.data_type || '—'}</td>
-                      <td>
-                        {col.formula ? (
-                          <code className="mono" style={{
-                            fontSize: '0.75rem',
-                            background: 'var(--bg-base)',
-                            padding: '2px 6px',
-                            borderRadius: 4,
-                            maxWidth: 300,
-                            display: 'inline-block',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}>{col.formula}</code>
-                        ) : '—'}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { Compass, Sparkles, GitCompare } from 'lucide-react';
 import PortfolioView from '../views/PortfolioView';
-import WorkbookInsightsView from '../views/WorkbookInsightsView';
 import KpiExplorerView from '../views/KpiExplorerView';
+import LandscapeView from '../views/LandscapeView';
 import RationalizationView from '../views/RationalizationView';
 
 export const agents = [
@@ -19,7 +19,6 @@ export const agents = [
       { label: 'Workbooks', value: m.workbookCount },
       { label: 'Sheets', value: m.sheetCount },
       { label: 'Datasources', value: m.datasourceCount },
-      { label: 'LOBs', value: m.lobCount },
     ],
   },
   {
@@ -27,11 +26,11 @@ export const agents = [
     path: '/intelligence',
     label: 'BI Intelligence',
     icon: Sparkles,
-    description: 'Business summaries, shared metrics, and sheet context',
+    description: 'Shared business metrics and KPI groups across workbooks',
     routes: ['/intelligence'],
     tabs: [
-      { id: 'insights', label: 'Workbook Guide', path: '/intelligence', Component: WorkbookInsightsView },
-      { id: 'metrics', label: 'Shared Metrics', path: '/intelligence/metrics', Component: KpiExplorerView },
+      { id: 'metrics', label: 'Shared Metrics', path: '/intelligence', Component: KpiExplorerView },
+      { id: 'landscape', label: 'Landscape', path: '/intelligence/landscape', Component: LandscapeView },
     ],
     metrics: (m) => [
       { label: 'Summaries', value: m.aiSummaryCount },

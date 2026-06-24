@@ -1,219 +1,176 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Filter, Users, ChevronDown, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { ChevronDown, Check, X } from 'lucide-react';
 import { api } from '../api/client';
 import { Loader } from '../components/shared';
 import PageHeader from '../components/layout/PageHeader';
 import { KPIDashboardGraph } from '../components/shared/KPIDashboardGraph';
 
 export default function LandscapeView() {
-  const [dashboardsList, setDashboardsList] = useState([]);
+  const [workbooks, setWorkbooks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedLOBs, setSelectedLOBs] = useState([]);
-  const [selectedUserGroups, setSelectedUserGroups] = useState([]);
-  const [isLOBOpen, setIsLOBOpen] = useState(false);
-  const [isGroupOpen, setIsGroupOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]); // empty = all
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
 
   useEffect(() => {
-    const fetchDashboards = async () => {
+    const fetchWorkbooks = async () => {
       try {
         setLoading(true);
-        const data = await api.getDashboards();
-        setDashboardsList(data || []);
+        const data = await api.getWorkbooks();
+        setWorkbooks(data || []);
       } catch (err) {
-        console.error('Failed to load dashboards:', err);
+        console.error('Failed to load workbooks:', err);
       } finally {
         setLoading(false);
       }
     };
-    fetchDashboards();
+    fetchWorkbooks();
   }, []);
 
-  // Dynamically extract LOBs and User Groups from backend dashboard rows
-  const { lobs, userGroups } = useMemo(() => {
-    const lobsSet = new Set();
-    const groupsSet = new Set();
-
-    dashboardsList.forEach(dash => {
-      const lob = dash.line_of_business || dash.domain_classification;
-      if (lob) {
-        lobsSet.add(lob);
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setDropdownOpen(false);
       }
-
-      // Handle user groups JSON or comma string
-      let groups = [];
-      if (Array.isArray(dash.user_groups)) {
-        groups = dash.user_groups;
-      } else if (typeof dash.user_groups === 'string') {
-        try {
-          groups = JSON.parse(dash.user_groups);
-        } catch {
-          groups = dash.user_groups.split(',').map(s => s.trim());
-        }
-      }
-      
-      groups.forEach(g => {
-        if (g) groupsSet.add(g);
-      });
-    });
-
-    return {
-      lobs: Array.from(lobsSet).sort(),
-      userGroups: Array.from(groupsSet).sort()
     };
-  }, [dashboardsList]);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
-  // Compute matched dashboards as a comma-separated filter string
-  const dashboardsStr = useMemo(() => {
-    const matchedNames = [];
-    
-    dashboardsList.forEach(dash => {
-      const lob = dash.line_of_business || dash.domain_classification;
-      const lobMatch = selectedLOBs.length === 0 || 
-        (lob && selectedLOBs.some(sl => sl.toLowerCase().trim() === String(lob).toLowerCase().trim()));
+  const allIds = useMemo(() => workbooks.map(w => w.id), [workbooks]);
 
-      let groups = [];
-      if (Array.isArray(dash.user_groups)) {
-        groups = dash.user_groups;
-      } else if (typeof dash.user_groups === 'string') {
-        try {
-          groups = JSON.parse(dash.user_groups);
-        } catch {
-          groups = dash.user_groups.split(',').map(s => s.trim());
-        }
-      }
-      
-      const groupMatch = selectedUserGroups.length === 0 || 
-        groups.some(g => selectedUserGroups.some(sg => sg.toLowerCase().trim() === String(g).toLowerCase().trim()));
+  // The IDs to pass to the graph: if none selected, pass all
+  const graphWorkbookIds = useMemo(() => {
+    if (selectedIds.length === 0) return allIds;
+    return selectedIds;
+  }, [selectedIds, allIds]);
 
-      if (lobMatch && groupMatch && dash.name) {
-        matchedNames.push(dash.name);
+  const isAllSelected = selectedIds.length === 0;
+
+  const toggleWorkbook = (id) => {
+    setSelectedIds(prev => {
+      if (prev.includes(id)) {
+        return prev.filter(x => x !== id);
+      } else {
+        return [...prev, id];
       }
     });
-
-    return matchedNames.join(',');
-  }, [dashboardsList, selectedLOBs, selectedUserGroups]);
-
-  const toggleLOB = (lob) => {
-    setSelectedLOBs(prev =>
-      prev.includes(lob) ? prev.filter(l => l !== lob) : [...prev, lob]
-    );
   };
 
-  const toggleGroup = (grp) => {
-    setSelectedUserGroups(prev =>
-      prev.includes(grp) ? prev.filter(g => g !== grp) : [...prev, grp]
-    );
+  const selectAll = () => {
+    setSelectedIds([]);
   };
+
+  const clearSelection = () => {
+    setSelectedIds([]);
+  };
+
+  // Label for dropdown trigger
+  const dropdownLabel = useMemo(() => {
+    if (isAllSelected) return 'All Workbooks';
+    if (selectedIds.length === 1) {
+      const wb = workbooks.find(w => w.id === selectedIds[0]);
+      return wb ? wb.name : '1 Selected';
+    }
+    return `${selectedIds.length} Workbooks Selected`;
+  }, [isAllSelected, selectedIds, workbooks]);
 
   if (loading) return <Loader />;
 
   return (
     <div className="page-enter" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      {/* Header and Global Filter Dropdowns */}
       <PageHeader
         title="BI Landscape Graph"
-        subtitle="Interactive D3 visualization of workbook lineage, calculation columns, and KPI relationships."
-        actions={(
-          <div style={{ display: 'flex', gap: '12px', position: 'relative' }}>
-          {/* LOB Dropdown Filter */}
-          <div style={{ position: 'relative' }}>
-            <button
-              onClick={() => { setIsLOBOpen(!isLOBOpen); setIsGroupOpen(false); }}
-              className="btn btn-ghost"
-              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px', fontSize: '0.85rem' }}
-            >
-              <Filter size={14} />
-              LOB {selectedLOBs.length > 0 && <span className="badge badge-purple" style={{ padding: '2px 6px', fontSize: '0.65rem' }}>{selectedLOBs.length}</span>}
-              <ChevronDown size={14} />
-            </button>
-            {isLOBOpen && (
-              <div style={{
-                position: 'absolute', right: 0, marginTop: '8px', width: '220px',
-                background: 'var(--bg-surface)', border: '1px solid var(--glass-border)',
-                borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)', zIndex: 110,
-                maxHeight: '260px', overflowY: 'auto', padding: '6px 0'
-              }}>
-                {lobs.length === 0 ? (
-                  <div style={{ padding: '12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>No LOB classifications found</div>
-                ) : (
-                  lobs.map(lob => (
-                    <label key={lob} style={{
-                      display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 16px',
-                      cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)'
-                    }} className="nav-link">
-                      <input
-                        type="checkbox"
-                        checked={selectedLOBs.includes(lob)}
-                        onChange={() => toggleLOB(lob)}
-                        style={{ accentColor: 'var(--accent-blue)', cursor: 'pointer' }}
-                      />
-                      <span>{lob}</span>
-                    </label>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* User Group Dropdown Filter */}
-          <div style={{ position: 'relative' }}>
-            <button
-              onClick={() => { setIsGroupOpen(!isGroupOpen); setIsLOBOpen(false); }}
-              className="btn btn-ghost"
-              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px', fontSize: '0.85rem' }}
-            >
-              <Users size={14} />
-              User Group {selectedUserGroups.length > 0 && <span className="badge badge-purple" style={{ padding: '2px 6px', fontSize: '0.65rem' }}>{selectedUserGroups.length}</span>}
-              <ChevronDown size={14} />
-            </button>
-            {isGroupOpen && (
-              <div style={{
-                position: 'absolute', right: 0, marginTop: '8px', width: '220px',
-                background: 'var(--bg-surface)', border: '1px solid var(--glass-border)',
-                borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)', zIndex: 110,
-                maxHeight: '260px', overflowY: 'auto', padding: '6px 0'
-              }}>
-                {userGroups.length === 0 ? (
-                  <div style={{ padding: '12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>No user groups found</div>
-                ) : (
-                  userGroups.map(grp => (
-                    <label key={grp} style={{
-                      display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 16px',
-                      cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)'
-                    }} className="nav-link">
-                      <input
-                        type="checkbox"
-                        checked={selectedUserGroups.includes(grp)}
-                        onChange={() => toggleGroup(grp)}
-                        style={{ accentColor: 'var(--accent-blue)', cursor: 'pointer' }}
-                      />
-                      <span>{grp}</span>
-                    </label>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-        )}
+        subtitle="Interactive visualization of workbook lineage, KPI relationships, shared sources, and connections."
       />
 
-      {/* Render the core D3 Graph view */}
+      {/* Workbook Multi-Select Toolbar */}
+      <div className="landscape-toolbar">
+        <div className="landscape-toolbar-label">Workbooks:</div>
+        <div className="landscape-multiselect" ref={dropdownRef}>
+          <button
+            className="landscape-multiselect-trigger"
+            onClick={() => setDropdownOpen(!dropdownOpen)}
+          >
+            <span className="landscape-multiselect-text">{dropdownLabel}</span>
+            <ChevronDown size={14} className={`landscape-chevron ${dropdownOpen ? 'open' : ''}`} />
+          </button>
+
+          {dropdownOpen && (
+            <div className="landscape-multiselect-dropdown">
+              {/* All option */}
+              <label
+                className={`landscape-multiselect-option ${isAllSelected ? 'selected' : ''}`}
+                onClick={selectAll}
+              >
+                <span className={`landscape-checkbox ${isAllSelected ? 'checked' : ''}`}>
+                  {isAllSelected && <Check size={10} />}
+                </span>
+                <span>All Workbooks</span>
+              </label>
+
+              <div className="landscape-multiselect-divider" />
+
+              {/* Individual workbooks */}
+              {workbooks.map(wb => {
+                const checked = selectedIds.includes(wb.id);
+                return (
+                  <label
+                    key={wb.id}
+                    className={`landscape-multiselect-option ${checked ? 'selected' : ''}`}
+                    onClick={() => toggleWorkbook(wb.id)}
+                  >
+                    <span className={`landscape-checkbox ${checked ? 'checked' : ''}`}>
+                      {checked && <Check size={10} />}
+                    </span>
+                    <span>{wb.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Selected tags */}
+        {!isAllSelected && (
+          <div className="landscape-selected-tags">
+            {selectedIds.map(id => {
+              const wb = workbooks.find(w => w.id === id);
+              return wb ? (
+                <span key={id} className="landscape-tag">
+                  {wb.name}
+                  <button
+                    className="landscape-tag-remove"
+                    onClick={() => toggleWorkbook(id)}
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ) : null;
+            })}
+            <button className="landscape-clear-btn" onClick={clearSelection}>
+              Clear All
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Graph */}
       <div className="card" style={{ height: '650px', width: '100%', padding: '24px', display: 'flex', flexDirection: 'column' }}>
-        {dashboardsStr ? (
-          <KPIDashboardGraph dashboards={dashboardsStr} height="100%" title="Workbook Relationship Map" />
+        {graphWorkbookIds.length > 0 ? (
+          <KPIDashboardGraph
+            workbookIds={graphWorkbookIds}
+            view="landscape"
+            height="100%"
+            title="Workbook Relationship Map"
+          />
         ) : (
           <div className="card" style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             height: '100%', flexDirection: 'column', gap: '12px', borderColor: 'var(--accent-rose)'
           }}>
-            <p style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>No sheets match the selected filter configuration.</p>
-            <button
-              onClick={() => { setSelectedLOBs([]); setSelectedUserGroups([]); }}
-              className="btn btn-ghost"
-              style={{ fontSize: '0.8rem' }}
-            >
-              Reset Filters
-            </button>
+            <p style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>No workbooks available.</p>
           </div>
         )}
       </div>

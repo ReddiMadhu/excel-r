@@ -6,17 +6,15 @@ import { Loader } from './index';
 
 const COLOR_MAP = {
   'Workbook': '#6366f1',          // Bright Indigo
-  'Dashboard': '#3b82f6',         // Bright Blue (Sheet)
+  'Dashboard': '#2563eb',         // Royal Blue
   'KPI': '#10b981',               // Emerald Green
-  'Shared KPI': '#059669',        // Deep Green
+  'Shared KPI': '#d946ef',        // Bright Fuchsia
   'Line of Business': '#8b5cf6',  // Violet
-  'Business Area': '#d946ef',     // Fuchsia
+  'Business Area': '#a855f7',     // Purple
   'User Group': '#ec4899',        // Pink
-  'Table': '#f43f5e',             // Rose/Coral Red
-  'Datasource': '#f97316',        // Orange
-  'Shared Datasource': '#d97706', // Amber/Brownish Orange
-  'Granularity Level': '#ca8a04', // Dark Yellow/Gold
-  'Upload Age': '#0d9488',        // Teal
+  'Table': '#e11d48',             // Crimson
+  'Datasource': '#ea580c',        // Rust Orange
+  'Shared Datasource': '#0891b2', // Dark Cyan/Teal
 };
 
 const LEGEND_ITEMS = [
@@ -30,8 +28,6 @@ const LEGEND_ITEMS = [
   { group: 'Table', label: 'Table' },
   { group: 'Datasource', label: 'Datasource' },
   { group: 'Shared Datasource', label: 'Shared Source' },
-  { group: 'Granularity Level', label: 'Granularity' },
-  { group: 'Upload Age', label: 'Upload Age' },
 ];
 
 const ACTION_COLORS = {
@@ -44,48 +40,6 @@ const ACTION_COLORS = {
 
 const getLegendShapeSvg = (group, color) => {
   const size = 12;
-  if (group === 'Workbook' || group === 'Dashboard') {
-    return (
-      <svg width={size} height={size} style={{ marginRight: 8, flexShrink: 0 }}>
-        <rect x={1} y={1} width={10} height={10} fill={color} rx={1} />
-      </svg>
-    );
-  }
-  if (group === 'Shared KPI' || group === 'KPI') {
-    return (
-      <svg width={size} height={size} style={{ marginRight: 8, flexShrink: 0 }}>
-        <path d="M6,1 L11,10.5 L1,10.5 Z" fill={color} />
-      </svg>
-    );
-  }
-  if (group === 'Shared Datasource' || group === 'Datasource') {
-    return (
-      <svg width={size} height={size} style={{ marginRight: 8, flexShrink: 0 }}>
-        <circle cx={6} cy={6} r={5} fill={color} />
-      </svg>
-    );
-  }
-  if (group === 'Table') {
-    return (
-      <svg width={size} height={size} style={{ marginRight: 8, flexShrink: 0 }}>
-        <path d="M6,0.5 L11,6 L6,11.5 L1,6 Z" fill={color} />
-      </svg>
-    );
-  }
-  if (group === 'User Group') {
-    return (
-      <svg width={size} height={size} style={{ marginRight: 8, flexShrink: 0 }}>
-        <path d="M4.5,1 L7.5,1 L7.5,4.5 L11,4.5 L11,7.5 L7.5,7.5 L7.5,11 L4.5,11 L4.5,7.5 L1,7.5 L1,4.5 L4.5,4.5 Z" fill={color} />
-      </svg>
-    );
-  }
-  if (group === 'Line of Business' || group === 'Business Area') {
-    return (
-      <svg width={size} height={size} style={{ marginRight: 8, flexShrink: 0 }}>
-        <path d="M6,0.5 L7.8,4.2 L11.9,4.8 L8.9,7.7 L9.6,11.8 L6,9.9 L2.4,11.8 L3.1,7.7 L0.1,4.8 L4.2,4.2 Z" fill={color} />
-      </svg>
-    );
-  }
   return (
     <svg width={size} height={size} style={{ marginRight: 8, flexShrink: 0 }}>
       <circle cx={6} cy={6} r={5} fill={color} />
@@ -145,7 +99,17 @@ export function KPIDashboardGraph({
         setIsLoading(true);
         setError(null);
         
-        const data = await api.getKpiGraphData(graphParams);
+        const rawData = await api.getKpiGraphData(graphParams);
+        const excludedGroups = new Set(['Line of Business', 'Business Area', 'User Group', 'Granularity Level', 'Upload Age']);
+        const filteredNodes = (rawData.nodes || []).filter(n => !excludedGroups.has(n.group));
+        const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
+        const filteredLinks = (rawData.links || []).filter(l => {
+          const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+          const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+          return filteredNodeIds.has(sourceId) && filteredNodeIds.has(targetId);
+        });
+
+        const data = { nodes: filteredNodes, links: filteredLinks };
 
         if (!data.nodes || data.nodes.length === 0) {
           throw new Error('No graph nodes found for the selected scope.');
@@ -225,30 +189,34 @@ export function KPIDashboardGraph({
       linkSelectionRef.current = link;
       linkLabelSelectionRef.current = linkLabel;
 
+      // Compute shared nodes dynamically
+      const sharedNodeIds = new Set();
+      nodes.forEach(n => {
+        if (n.group === 'KPI' || n.group === 'Datasource') {
+          const connectedWbs = new Set();
+          links.forEach(l => {
+            const s = typeof l.source === 'object' ? l.source.id : l.source;
+            const t = typeof l.target === 'object' ? l.target.id : l.target;
+            if (s === n.id) {
+              const other = nodes.find(node => node.id === t);
+              if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) connectedWbs.add(other.id);
+            }
+            if (t === n.id) {
+              const other = nodes.find(node => node.id === s);
+              if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) connectedWbs.add(other.id);
+            }
+          });
+          if (connectedWbs.size > 1) {
+            sharedNodeIds.add(n.id);
+          }
+        }
+      });
+
       // Setup symbol generator
       const symbolGen = d3.symbol();
 
       const getSymbolType = (group) => {
-        switch (group) {
-          case 'Workbook':
-          case 'Dashboard':
-            return d3.symbolSquare;
-          case 'Shared KPI':
-          case 'KPI':
-            return d3.symbolTriangle;
-          case 'Shared Datasource':
-          case 'Datasource':
-            return d3.symbolCircle;
-          case 'Table':
-            return d3.symbolDiamond;
-          case 'User Group':
-            return d3.symbolCross;
-          case 'Line of Business':
-          case 'Business Area':
-            return d3.symbolStar;
-          default:
-            return d3.symbolCircle;
-        }
+        return d3.symbolCircle;
       };
 
       const getSymbolSize = (group) => {
@@ -264,6 +232,12 @@ export function KPIDashboardGraph({
         .attr('fill', d => {
           if (d.group === 'Workbook' && d.action) {
             return ACTION_COLORS[d.action] || COLOR_MAP['Workbook'];
+          }
+          if (d.group === 'KPI' && sharedNodeIds.has(d.id)) {
+            return COLOR_MAP['Shared KPI'];
+          }
+          if (d.group === 'Datasource' && sharedNodeIds.has(d.id)) {
+            return COLOR_MAP['Shared Datasource'];
           }
           return COLOR_MAP[d.group] || 'var(--text-muted)';
         })
@@ -700,19 +674,58 @@ export function KPIDashboardGraph({
         } else {
           nodes.forEach(n => {
             if (n.group === 'KPI') {
-              const connected = links.filter(l => {
+              const connectedWbs = new Set();
+              links.forEach(l => {
                 const s = getSourceId(l);
                 const t = getTargetId(l);
-                return (s === n.id || t === n.id);
+                if (s === n.id) {
+                  const other = nodes.find(node => node.id === t);
+                  if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) {
+                    connectedWbs.add(other.id);
+                  }
+                }
+                if (t === n.id) {
+                  const other = nodes.find(node => node.id === s);
+                  if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) {
+                    connectedWbs.add(other.id);
+                  }
+                }
               });
-              if (connected.length > 1) {
+              if (connectedWbs.size > 1) {
                 highlightTargets.add(n.id);
               }
             }
           });
         }
       } else if (activeHighlight === 'shared-source') {
-        nodes.forEach(n => { if (n.group === 'Shared Datasource' || n.group === 'Datasource') highlightTargets.add(n.id); });
+        if (view === 'rationalization') {
+          nodes.forEach(n => { if (n.group === 'Shared Datasource') highlightTargets.add(n.id); });
+        } else {
+          nodes.forEach(n => {
+            if (n.group === 'Shared Datasource' || n.group === 'Datasource') {
+              const connectedWbs = new Set();
+              links.forEach(l => {
+                const s = getSourceId(l);
+                const t = getTargetId(l);
+                if (s === n.id) {
+                  const other = nodes.find(node => node.id === t);
+                  if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) {
+                    connectedWbs.add(other.id);
+                  }
+                }
+                if (t === n.id) {
+                  const other = nodes.find(node => node.id === s);
+                  if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) {
+                    connectedWbs.add(other.id);
+                  }
+                }
+              });
+              if (connectedWbs.size > 1) {
+                highlightTargets.add(n.id);
+              }
+            }
+          });
+        }
       } else if (activeHighlight === 'workbook') {
         nodes.forEach(n => { if (n.group === 'Workbook') highlightTargets.add(n.id); });
       }
@@ -822,6 +835,15 @@ export function KPIDashboardGraph({
             >
               Shared KPIs
             </button>
+            {presentGroups.has('Datasource') && (
+              <button
+                onClick={() => handleHighlightClick('shared-source')}
+                className={`btn ${activeHighlight === 'shared-source' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+              >
+                Filter Shared Sources
+              </button>
+            )}
             <button
               onClick={() => handleHighlightClick('kpi')}
               className={`btn ${activeHighlight === 'kpi' ? 'btn-primary' : 'btn-ghost'}`}
@@ -843,24 +865,6 @@ export function KPIDashboardGraph({
                 style={{ padding: '6px 12px', fontSize: '0.8rem' }}
               >
                 Datasources
-              </button>
-            )}
-            {presentGroups.has('User Group') && (
-              <button
-                onClick={() => handleHighlightClick('user-group')}
-                className={`btn ${activeHighlight === 'user-group' ? 'btn-primary' : 'btn-ghost'}`}
-                style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-              >
-                User Group
-              </button>
-            )}
-            {presentGroups.has('Upload Age') && (
-              <button
-                onClick={() => handleHighlightClick('upload-age')}
-                className={`btn ${activeHighlight === 'upload-age' ? 'btn-primary' : 'btn-ghost'}`}
-                style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-              >
-                Upload Age
               </button>
             )}
           </>

@@ -11,8 +11,6 @@ import PageHeader from '../components/layout/PageHeader';
 
 const VIEW_MODES = [
   { id: 'list', label: 'All Workbooks', icon: List },
-  { id: 'lob', label: 'By LOB', icon: Building2 },
-  { id: 'user_group', label: 'By Business', icon: Users },
 ];
 
 function effectiveRecAction(wbId, rec, allRecs) {
@@ -54,24 +52,6 @@ function WorkbookListCard({ wb, catalogEntry, rec, recommendations, onClick }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
           <h3 style={{ margin: 0 }}>{wb.name}</h3>
         </div>
-        {(mainLob || mainBusiness) && (
-          <div className="workbook-tags-row" style={{ marginBottom: 10 }}>
-            {mainLob && (
-              <span className={`workbook-tag workbook-tag-lob ${suggested ? 'tag-suggested' : ''}`} title={suggested ? 'Suggested from report' : undefined}>
-                <span className="tag-dot" style={{ backgroundColor: 'var(--accent-blue)' }}></span>
-                <span className="tag-label">LOB</span>
-                <span className="tag-value">{mainLob}</span>
-              </span>
-            )}
-            {mainBusiness && (
-              <span className={`workbook-tag workbook-tag-business ${suggested ? 'tag-suggested' : ''}`} title={suggested ? 'Suggested from report' : undefined}>
-                <span className="tag-dot" style={{ backgroundColor: 'var(--accent-amber)' }}></span>
-                <span className="tag-label">Business</span>
-                <span className="tag-value">{mainBusiness}</span>
-              </span>
-            )}
-          </div>
-        )}
         <p className="text-secondary" style={{ fontSize: '0.85rem', marginBottom: 8 }}>
           {wb.sheet_count} sheets &middot; {wb.calculated_field_count || 0} calc fields
           &middot; {wb.datasource_count || 0} datasources
@@ -216,7 +196,6 @@ export default function PortfolioView() {
         <StatCard icon={FileSpreadsheet} value={(workbooks || []).length} label="Workbooks" color="blue" />
         <StatCard icon={BarChart3} value={totalSheets} label="Sheets" color="purple" />
         <StatCard icon={Database} value={totalDatasources} label="Datasources" color="emerald" />
-        <StatCard icon={Building2} value={catalog?.lobs?.length ?? 0} label="LOBs" color="amber" />
       </div>
 
       {(!workbooks || workbooks.length === 0) ? (

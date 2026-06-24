@@ -9,10 +9,12 @@ export function sheetTypeLabel(sheetType) {
   return sheetType?.replace(/_/g, ' ') || 'Sheet';
 }
 
-export function columnTypeLabel(columnType) {
+export function columnTypeLabel(columnType, dataType) {
   if (columnType === 'formula_based' || columnType === 'pivot_value') return 'Calculated';
-  if (columnType === 'label') return 'Category';
-  return 'Data';
+  if (columnType === 'label' || columnType === 'raw') {
+    return dataType || (columnType === 'label' ? 'Category' : 'Data');
+  }
+  return dataType || 'Data';
 }
 
 export function describeActiveFilters(filters) {

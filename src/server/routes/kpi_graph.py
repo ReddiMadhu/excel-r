@@ -123,11 +123,16 @@ def build_graph_data(
 
     for dash in matched_dashboards:
         if dash.get("sheet_type") == "raw_data":
-            ds_id = f"ds_{dash['id']}"
+            wb_id = f"wb_{dash['workbook_id']}"
+            add_node(wb_id, "Workbook", dash["workbook_name"])
+            
+            ds_id = f"ds_{dash['name'].lower().replace(' ', '_')}"
             add_node(ds_id, "Datasource", dash["name"], {
                 "sheet_id": dash["id"],
                 "workbook_id": dash["workbook_id"],
             })
+            add_link(wb_id, ds_id, "has_datasource")
+            
             datasource_index[(dash["workbook_id"], dash["name"].lower())] = ds_id
             datasources = db.query(
                 "SELECT name FROM datasources WHERE workbook_id = ? AND name = ?",
@@ -140,25 +145,20 @@ def build_graph_data(
         if dash.get("sheet_type") == "raw_data":
             continue
 
-        dash_id = f"dash_{dash['id']}"
-        dash_label = f"{dash['workbook_name']} - {dash['name']}"
-        add_node(dash_id, "Dashboard", dash_label, {
-            "complexity": dash.get("complexity_score") or 1.0,
-            "sheet_id": dash["id"],
-            "workbook_id": dash["workbook_id"],
-        })
+        wb_id = f"wb_{dash['workbook_id']}"
+        add_node(wb_id, "Workbook", dash["workbook_name"])
 
         lob = dash.get("line_of_business")
         if lob:
             lob_id = f"lob_{lob.lower().replace(' ', '_')}"
             add_node(lob_id, "Line of Business", lob)
-            add_link(dash_id, lob_id, "belongs_to")
+            add_link(wb_id, lob_id, "belongs_to")
 
         domain = dash.get("domain_classification")
         if domain:
             domain_id = f"domain_{domain.lower().replace(' ', '_')}"
             add_node(domain_id, "Business Area", domain)
-            add_link(dash_id, domain_id, "in_domain")
+            add_link(wb_id, domain_id, "in_domain")
 
         ugroups = _parse_json_field(dash.get("user_groups"))
         for g in ugroups:
@@ -166,38 +166,14 @@ def build_graph_data(
                 continue
             group_id = f"group_{str(g).lower().replace(' ', '_')}"
             add_node(group_id, "User Group", str(g))
-            add_link(dash_id, group_id, "used_by")
-
-        try:
-            up_time_str = dash.get("workbook_uploaded_at")
-            if up_time_str:
-                if " " in up_time_str:
-                    dt = datetime.strptime(up_time_str.split(".")[0], "%Y-%m-%d %H:%M:%S")
-                else:
-                    dt = datetime.fromisoformat(up_time_str.split(".")[0])
-                days_old = (datetime.now() - dt).days
-            else:
-                days_old = 0
-        except Exception:
-            days_old = 0
-
-        if days_old <= 30:
-            age_label = "Recent Upload (< 1 month)"
-        elif days_old <= 180:
-            age_label = "Active (1-6 months)"
-        else:
-            age_label = "Stale (> 6 months)"
-
-        age_id = f"upload_age_{age_label.lower().replace(' ', '_').replace('<', 'lt').replace('>', 'gt')}"
-        add_node(age_id, "Upload Age", age_label)
-        add_link(dash_id, age_id, "uploaded")
+            add_link(wb_id, group_id, "used_by")
 
         tables = db.query("SELECT * FROM worksheets WHERE dashboard_id = ?", (dash["id"],))
         for t in tables:
             t_id = f"table_{t['id']}"
             t_name = t["name"]
             add_node(t_id, "Table", t_name, {"table_id": t["id"]})
-            add_link(dash_id, t_id, "contains")
+            add_link(wb_id, t_id, "contains")
             table_index[(dash["workbook_id"], t_name.lower())] = t_id
 
         cfs = db.query("SELECT * FROM calculated_fields WHERE dashboard_id = ?", (dash["id"],))
@@ -205,24 +181,12 @@ def build_graph_data(
             orig_name = cf["name"]
             canon_name = kpi_map.get(orig_name.lower(), orig_name)
 
-            match = re.search(r"\b(?:by|per)\s+([a-zA-Z0-9_\s]+)", canon_name, re.IGNORECASE)
-            if match:
-                gran = f"{match.group(1).strip().title()} Level"
-                base_kpi = re.sub(
-                    r"\b(?:by|per)\s+([a-zA-Z0-9_\s]+)", "", canon_name, flags=re.IGNORECASE
-                ).strip()
-            else:
-                gran = "Overall Level"
-                base_kpi = canon_name
+            base_kpi = canon_name
 
             kpi_id = f"kpi_{base_kpi.lower().replace(' ', '_')}"
             add_node(kpi_id, "KPI", base_kpi, {"definition": cf.get("definition") or ""})
 
-            gran_id = f"granularity_{gran.lower().replace(' ', '_')}"
-            add_node(gran_id, "Granularity Level", gran)
-
-            add_link(dash_id, kpi_id, "has_kpi", {"granularity": gran})
-            add_link(kpi_id, gran_id, "granularity")
+            add_link(wb_id, kpi_id, "has_kpi")
 
             cf_table = (cf.get("table_name") or "").lower()
             if cf_table and (dash["workbook_id"], cf_table) in table_index:
@@ -236,8 +200,8 @@ def build_graph_data(
                 src_key = (dash["workbook_id"], src_lower)
                 target_id = datasource_index.get(src_key) or table_index.get(src_key)
                 if not target_id:
-                    for (wb_id, name), nid in {**datasource_index, **table_index}.items():
-                        if wb_id == dash["workbook_id"] and (name in src_lower or src_lower in name):
+                    for (wb_id_key, name), nid in {**datasource_index, **table_index}.items():
+                        if wb_id_key == dash["workbook_id"] and (name in src_lower or src_lower in name):
                             target_id = nid
                             break
                 if target_id:

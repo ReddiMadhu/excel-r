@@ -4,6 +4,7 @@ import Sidebar from './components/layout/Sidebar';
 import UploadView from './views/UploadView';
 import WorkbookDetailView from './views/WorkbookDetailView';
 import AgentWorkspaceView from './views/AgentWorkspaceView';
+import RationalizationDetailView from './views/RationalizationDetailView';
 
 export default function App() {
   return (
@@ -18,14 +19,15 @@ export default function App() {
                 <Route path="/upload" element={<UploadView />} />
                 <Route path="/discovery" element={<AgentWorkspaceView agentId="discovery" />} />
                 <Route path="/intelligence" element={<AgentWorkspaceView agentId="intelligence" />} />
-                <Route path="/intelligence/metrics" element={<AgentWorkspaceView agentId="intelligence" />} />
+                <Route path="/intelligence/landscape" element={<AgentWorkspaceView agentId="intelligence" />} />
+                <Route path="/intelligence/metrics" element={<Navigate to="/intelligence" replace />} />
                 <Route path="/intelligence/tables" element={<Navigate to="/intelligence" replace />} />
                 <Route path="/rationalization" element={<AgentWorkspaceView agentId="rationalization" />} />
+                <Route path="/rationalization/review/:type/:id" element={<RationalizationDetailView />} />
                 <Route path="/workbooks/:id" element={<WorkbookDetailView />} />
-                <Route path="/kpi-clusters" element={<Navigate to="/intelligence/metrics" replace />} />
-                <Route path="/intelligence/kpi" element={<Navigate to="/intelligence/metrics" replace />} />
-                <Route path="/landscape" element={<Navigate to="/intelligence" replace />} />
-                <Route path="/intelligence/landscape" element={<Navigate to="/intelligence" replace />} />
+                <Route path="/kpi-clusters" element={<Navigate to="/intelligence" replace />} />
+                <Route path="/intelligence/kpi" element={<Navigate to="/intelligence" replace />} />
+                <Route path="/landscape" element={<Navigate to="/intelligence/landscape" replace />} />
               </Routes>
             </div>
           </main>
@@ -34,3 +36,4 @@ export default function App() {
     </ThemeProvider>
   );
 }
+
