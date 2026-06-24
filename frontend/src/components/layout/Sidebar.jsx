@@ -39,7 +39,7 @@ export default function Sidebar() {
         </div>
         <div className="sidebar-brand-text">
           <span className="brand-subtitle">BI Governance</span>
-          <span className="brand-title">Excel Ration.</span>
+          <span className="brand-title">Excel Ration<span className="brand-dot">.</span></span>
         </div>
       </div>
       <nav className="sidebar-nav">

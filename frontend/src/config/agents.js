@@ -1,4 +1,4 @@
-import { Search, Brain, GitCompare } from 'lucide-react';
+import { Compass, Sparkles, GitCompare } from 'lucide-react';
 import PortfolioView from '../views/PortfolioView';
 import WorkbookInsightsView from '../views/WorkbookInsightsView';
 import KpiExplorerView from '../views/KpiExplorerView';
@@ -9,7 +9,7 @@ export const agents = [
     id: 'discovery',
     path: '/discovery',
     label: 'BI Discovery',
-    icon: Search,
+    icon: Compass,
     description: 'Database structure, LOB catalog, dataset metadata',
     routes: ['/discovery', '/workbooks'],
     tabs: [
@@ -26,7 +26,7 @@ export const agents = [
     id: 'intelligence',
     path: '/intelligence',
     label: 'BI Intelligence',
-    icon: Brain,
+    icon: Sparkles,
     description: 'Business summaries, shared metrics, and sheet context',
     routes: ['/intelligence'],
     tabs: [
