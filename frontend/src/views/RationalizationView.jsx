@@ -156,9 +156,9 @@ function OverlapHeatmap({ workbooks, pairs }) {
   });
 
   const getColor = (val) => {
-    if (val >= 0.7) return 'rgba(244, 63, 94, 0.7)';
-    if (val >= 0.4) return 'rgba(245, 158, 11, 0.6)';
-    if (val > 0) return 'rgba(59, 130, 246, 0.3)';
+    if (val >= 0.7) return 'rgba(244, 63, 94, 0.75)';
+    if (val >= 0.4) return 'rgba(245, 158, 11, 0.65)';
+    if (val > 0) return 'rgba(59, 130, 246, 0.4)';
     return 'var(--bg-elevated)';
   };
 
@@ -281,8 +281,13 @@ function DecommissionPairCard({ rec }) {
 }
 
 function RecommendationCard({ rec }) {
+  const borderColor = rec.action === 'keep' ? 'var(--accent-emerald)'
+    : rec.action === 'merge' ? 'var(--accent-amber)'
+    : rec.action === 'review' ? 'var(--accent-blue)'
+    : 'var(--glass-border)';
+
   return (
-    <div className="card">
+    <div className="card" style={{ borderLeft: `3px solid ${borderColor}` }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>

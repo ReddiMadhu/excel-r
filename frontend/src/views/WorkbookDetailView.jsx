@@ -217,7 +217,7 @@ function SheetDetail({ sheet }) {
                   style={{
                     cursor: 'pointer',
                     border: isActive ? '2px solid var(--accent-blue)' : undefined,
-                    background: isActive ? 'var(--status-keep-bg)' : undefined,
+                    background: isActive ? 'rgba(236, 63, 6, 0.1)' : undefined,
                   }}
                 >
                   <Table2 size={12} /> {ws.name} ({ws.row_count}×{ws.column_count})
@@ -347,7 +347,7 @@ function SheetDetail({ sheet }) {
                           {col.formula ? (
                             <code className="mono" style={{
                               fontSize: '0.75rem',
-                              background: 'var(--bg-surface)',
+                              background: 'var(--bg-base)',
                               padding: '2px 6px',
                               borderRadius: 4,
                               maxWidth: 250,

@@ -51,19 +51,27 @@ function WorkbookListCard({ wb, catalogEntry, rec, recommendations, onClick }) {
   return (
     <div className="card card-clickable" onClick={onClick}>
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
           <h3 style={{ margin: 0 }}>{wb.name}</h3>
-          {mainLob && (
-            <span className={`badge badge-blue ${suggested ? 'badge-suggested' : ''}`} title={suggested ? 'Suggested from report' : undefined}>
-              {mainLob}
-            </span>
-          )}
-          {mainBusiness && (
-            <span className={`badge badge-amber ${suggested ? 'badge-suggested' : ''}`} title={suggested ? 'Suggested from report' : undefined}>
-              {mainBusiness}
-            </span>
-          )}
         </div>
+        {(mainLob || mainBusiness) && (
+          <div className="workbook-tags-row" style={{ marginBottom: 10 }}>
+            {mainLob && (
+              <span className={`workbook-tag workbook-tag-lob ${suggested ? 'tag-suggested' : ''}`} title={suggested ? 'Suggested from report' : undefined}>
+                <span className="tag-dot" style={{ backgroundColor: 'var(--accent-blue)' }}></span>
+                <span className="tag-label">LOB</span>
+                <span className="tag-value">{mainLob}</span>
+              </span>
+            )}
+            {mainBusiness && (
+              <span className={`workbook-tag workbook-tag-business ${suggested ? 'tag-suggested' : ''}`} title={suggested ? 'Suggested from report' : undefined}>
+                <span className="tag-dot" style={{ backgroundColor: 'var(--accent-amber)' }}></span>
+                <span className="tag-label">Business</span>
+                <span className="tag-value">{mainBusiness}</span>
+              </span>
+            )}
+          </div>
+        )}
         <p className="text-secondary" style={{ fontSize: '0.85rem', marginBottom: 8 }}>
           {wb.sheet_count} sheets &middot; {wb.calculated_field_count || 0} calc fields
           &middot; {wb.datasource_count || 0} datasources

@@ -13,7 +13,7 @@ export function StatCard({ icon: Icon, value, label, color = 'blue' }) {
 export function Badge({ action }) {
   const cls = action === 'keep' ? 'badge-keep'
     : action === 'merge' ? 'badge-merge'
-    : action === 'review' ? 'badge-merge'
+    : action === 'review' ? 'badge-blue'
     : action === 'decommission' || action === 'delete' ? 'badge-decommission'
     : 'badge-blue';
   return <span className={`badge ${cls}`}>{action}</span>;

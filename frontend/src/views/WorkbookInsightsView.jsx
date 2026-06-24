@@ -134,18 +134,24 @@ export default function WorkbookInsightsView() {
                     Run <strong>BI Intelligence</strong> from the sidebar to generate a business summary for this workbook.
                   </p>
                 )}
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
-                  {businessContext.lineOfBusiness && (
-                    <span className={`badge badge-blue ${businessContext.suggested ? 'badge-suggested' : ''}`}>
-                      {businessContext.lineOfBusiness}
-                    </span>
-                  )}
-                  {businessContext.businessGroup && (
-                    <span className={`badge badge-amber ${businessContext.suggested ? 'badge-suggested' : ''}`}>
-                      {businessContext.businessGroup}
-                    </span>
-                  )}
-                </div>
+                {(businessContext.lineOfBusiness || businessContext.businessGroup) && (
+                  <div className="workbook-tags-row" style={{ marginTop: 12 }}>
+                    {businessContext.lineOfBusiness && (
+                      <span className={`workbook-tag workbook-tag-lob ${businessContext.suggested ? 'tag-suggested' : ''}`}>
+                        <span className="tag-dot" style={{ backgroundColor: 'var(--accent-blue)' }}></span>
+                        <span className="tag-label">LOB</span>
+                        <span className="tag-value">{businessContext.lineOfBusiness}</span>
+                      </span>
+                    )}
+                    {businessContext.businessGroup && (
+                      <span className={`workbook-tag workbook-tag-business ${businessContext.suggested ? 'tag-suggested' : ''}`}>
+                        <span className="tag-dot" style={{ backgroundColor: 'var(--accent-amber)' }}></span>
+                        <span className="tag-label">Business</span>
+                        <span className="tag-value">{businessContext.businessGroup}</span>
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>

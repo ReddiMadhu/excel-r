@@ -24,12 +24,16 @@ function FormulaNode({ data }) {
 
   return (
     <div
-      className="px-4 py-3 rounded-lg shadow-md text-white font-sans relative"
       style={{
         backgroundColor: bgColor,
         border: borderStyle,
         minWidth: 200,
         boxShadow: 'var(--shadow-md)',
+        padding: '12px 16px',
+        borderRadius: 'var(--radius-md)',
+        color: 'white',
+        fontFamily: "'Inter', sans-serif",
+        position: 'relative',
       }}
     >
       <Handle
@@ -42,16 +46,16 @@ function FormulaNode({ data }) {
         position={Position.Right}
         style={{ background: '#ffffff', width: 6, height: 6 }}
       />
-      <div className="font-semibold text-sm mb-1">{data.label}</div>
-      <div className="text-[10px] opacity-90 truncate font-mono mb-1">
+      <div style={{ fontWeight: 600, fontSize: '0.875rem', marginBottom: 4 }}>{data.label}</div>
+      <div style={{ fontSize: '10px', opacity: 0.9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>
         {data.table_name ? `${data.table_name}` : 'Workbook'}
       </div>
       {data.formula && (
-        <div className="text-[10px] opacity-80 truncate font-mono" title={data.formula}>
+        <div style={{ fontSize: '10px', opacity: 0.8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: "'JetBrains Mono', monospace" }} title={data.formula}>
           {data.formula}
         </div>
       )}
-      <div className="text-[9px] opacity-75 mt-1 flex justify-between">
+      <div style={{ fontSize: '9px', opacity: 0.75, marginTop: 4, display: 'flex', justifyContent: 'space-between' }}>
         <span>{data.column_type || (isRaw ? 'RAW' : 'FORMULA')}</span>
         <span>{data.data_type || ''}</span>
       </div>
@@ -167,7 +171,7 @@ export default function LineageGraph({ columnName, tableName, formula, lineage }
   }
 
   return (
-    <div className="w-full bg-white rounded-lg border border-gray-200" style={{ height: '400px', background: 'var(--bg-surface)', borderColor: 'var(--glass-border)' }}>
+    <div style={{ width: '100%', height: '400px', background: 'var(--bg-surface)', borderColor: 'var(--glass-border)', borderWidth: 1, borderStyle: 'solid', borderRadius: 'var(--radius-lg)' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
