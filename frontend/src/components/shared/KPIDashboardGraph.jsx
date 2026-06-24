@@ -5,7 +5,7 @@ import { api } from '../../api/client';
 import { Loader } from './index';
 
 const COLOR_MAP = {
-  'Workbook': '#6366f1',          // Bright Indigo
+  'Report': '#6366f1',            // Bright Indigo
   'Dashboard': '#2563eb',         // Royal Blue
   'KPI': '#10b981',               // Emerald Green
   'Shared KPI': '#d946ef',        // Bright Fuchsia
@@ -18,7 +18,7 @@ const COLOR_MAP = {
 };
 
 const LEGEND_ITEMS = [
-  { group: 'Workbook', label: 'Workbook' },
+  { group: 'Report', label: 'Report' },
   { group: 'Dashboard', label: 'Sheet' },
   { group: 'KPI', label: 'KPI' },
   { group: 'Shared KPI', label: 'Shared KPI' },
@@ -199,11 +199,11 @@ export function KPIDashboardGraph({
             const t = typeof l.target === 'object' ? l.target.id : l.target;
             if (s === n.id) {
               const other = nodes.find(node => node.id === t);
-              if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) connectedWbs.add(other.id);
+              if (other && (other.group === 'Report' || other.group === 'Dashboard')) connectedWbs.add(other.id);
             }
             if (t === n.id) {
               const other = nodes.find(node => node.id === s);
-              if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) connectedWbs.add(other.id);
+              if (other && (other.group === 'Report' || other.group === 'Dashboard')) connectedWbs.add(other.id);
             }
           });
           if (connectedWbs.size > 1) {
@@ -220,7 +220,7 @@ export function KPIDashboardGraph({
       };
 
       const getSymbolSize = (group) => {
-        if (group === 'Workbook' || group === 'Dashboard') {
+        if (group === 'Report' || group === 'Dashboard') {
           return 900; // area in square pixels
         }
         return 400; // area in square pixels
@@ -230,8 +230,8 @@ export function KPIDashboardGraph({
       node.append('path')
         .attr('d', d => symbolGen.type(getSymbolType(d.group)).size(getSymbolSize(d.group))())
         .attr('fill', d => {
-          if (d.group === 'Workbook' && d.action) {
-            return ACTION_COLORS[d.action] || COLOR_MAP['Workbook'];
+          if (d.group === 'Report' && d.action) {
+            return ACTION_COLORS[d.action] || COLOR_MAP['Report'];
           }
           if (d.group === 'KPI' && sharedNodeIds.has(d.id)) {
             return COLOR_MAP['Shared KPI'];
@@ -249,10 +249,10 @@ export function KPIDashboardGraph({
       node.append('text')
         .text(d => d.label)
         .attr('x', 0)
-        .attr('y', d => (d.group === 'Workbook' || d.group === 'Dashboard') ? 28 : 20)
+        .attr('y', d => (d.group === 'Report' || d.group === 'Dashboard') ? 28 : 20)
         .attr('text-anchor', 'middle')
         .attr('font-size', '11px')
-        .attr('font-weight', d => (d.group === 'Workbook' || d.group === 'Dashboard') ? 'bold' : '500')
+        .attr('font-weight', d => (d.group === 'Report' || d.group === 'Dashboard') ? 'bold' : '500')
         .attr('fill', 'var(--text-primary)')
         .style('pointer-events', 'none')
         .each(function(d) {
@@ -404,12 +404,12 @@ export function KPIDashboardGraph({
       const d = clickedNode;
       nodesToHighlight.add(d.id);
 
-      if (d.group === 'Workbook') {
+      if (d.group === 'Report') {
         const action = d.action || 'keep';
         if (action === 'decommission' || action === 'delete') {
           nodePulseClasses.set(d.id, 'decom');
           const targetName = d.merge_with_name;
-          const targetNode = nodes.find(n => n.group === 'Workbook' && n.label === targetName);
+          const targetNode = nodes.find(n => n.group === 'Report' && n.label === targetName);
 
           if (targetNode) {
             nodesToHighlight.add(targetNode.id);
@@ -457,7 +457,7 @@ export function KPIDashboardGraph({
         } else if (action === 'merge') {
           nodePulseClasses.set(d.id, 'merge');
           const targetName = d.merge_with_name;
-          const targetNode = nodes.find(n => n.group === 'Workbook' && n.label === targetName);
+          const targetNode = nodes.find(n => n.group === 'Report' && n.label === targetName);
 
           if (targetNode) {
             nodesToHighlight.add(targetNode.id);
@@ -540,7 +540,7 @@ export function KPIDashboardGraph({
         return nodeAction === filterAction;
       };
 
-      const sourceNodes = nodes.filter(n => n.group === 'Workbook' && matchAction(n.action));
+      const sourceNodes = nodes.filter(n => n.group === 'Report' && matchAction(n.action));
 
       sourceNodes.forEach(srcNode => {
         nodesToHighlight.add(srcNode.id);
@@ -548,7 +548,7 @@ export function KPIDashboardGraph({
         if (filterAction === 'decommission') {
           nodePulseClasses.set(srcNode.id, 'decom');
           const targetName = srcNode.merge_with_name;
-          const targetNode = nodes.find(n => n.group === 'Workbook' && n.label === targetName);
+          const targetNode = nodes.find(n => n.group === 'Report' && n.label === targetName);
 
           if (targetNode) {
             nodesToHighlight.add(targetNode.id);
@@ -596,7 +596,7 @@ export function KPIDashboardGraph({
         } else if (filterAction === 'merge') {
           nodePulseClasses.set(srcNode.id, 'merge');
           const targetName = srcNode.merge_with_name;
-          const targetNode = nodes.find(n => n.group === 'Workbook' && n.label === targetName);
+          const targetNode = nodes.find(n => n.group === 'Report' && n.label === targetName);
 
           if (targetNode) {
             nodesToHighlight.add(targetNode.id);
@@ -680,13 +680,13 @@ export function KPIDashboardGraph({
                 const t = getTargetId(l);
                 if (s === n.id) {
                   const other = nodes.find(node => node.id === t);
-                  if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) {
+                  if (other && (other.group === 'Report' || other.group === 'Dashboard')) {
                     connectedWbs.add(other.id);
                   }
                 }
                 if (t === n.id) {
                   const other = nodes.find(node => node.id === s);
-                  if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) {
+                  if (other && (other.group === 'Report' || other.group === 'Dashboard')) {
                     connectedWbs.add(other.id);
                   }
                 }
@@ -709,13 +709,13 @@ export function KPIDashboardGraph({
                 const t = getTargetId(l);
                 if (s === n.id) {
                   const other = nodes.find(node => node.id === t);
-                  if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) {
+                  if (other && (other.group === 'Report' || other.group === 'Dashboard')) {
                     connectedWbs.add(other.id);
                   }
                 }
                 if (t === n.id) {
                   const other = nodes.find(node => node.id === s);
-                  if (other && (other.group === 'Workbook' || other.group === 'Dashboard')) {
+                  if (other && (other.group === 'Report' || other.group === 'Dashboard')) {
                     connectedWbs.add(other.id);
                   }
                 }
@@ -726,8 +726,8 @@ export function KPIDashboardGraph({
             }
           });
         }
-      } else if (activeHighlight === 'workbook') {
-        nodes.forEach(n => { if (n.group === 'Workbook') highlightTargets.add(n.id); });
+      } else if (activeHighlight === 'report') {
+        nodes.forEach(n => { if (n.group === 'Report') highlightTargets.add(n.id); });
       }
 
       highlightTargets.forEach(id => nodesToHighlight.add(id));
@@ -803,11 +803,11 @@ export function KPIDashboardGraph({
         {isRationalization ? (
           <>
             <button
-              onClick={() => handleHighlightClick('workbook')}
-              className={`btn ${activeHighlight === 'workbook' ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => handleHighlightClick('report')}
+              className={`btn ${activeHighlight === 'report' ? 'btn-primary' : 'btn-ghost'}`}
               style={{ padding: '6px 12px', fontSize: '0.8rem' }}
             >
-              Workbooks
+              Reports
             </button>
             <button
               onClick={() => handleHighlightClick('shared-kpi')}
@@ -922,18 +922,18 @@ export function KPIDashboardGraph({
                   <span className="kpi-graph-legend-label">{item.label}</span>
                 </div>
               ))}
-              {isRationalization && presentGroups.has('Workbook') && (
+              {isRationalization && presentGroups.has('Report') && (
                 <>
                   <div className="kpi-graph-legend-item">
-                    {getLegendShapeSvg('Workbook', ACTION_COLORS.keep)}
+                    {getLegendShapeSvg('Report', ACTION_COLORS.keep)}
                     <span className="kpi-graph-legend-label">Keep</span>
                   </div>
                   <div className="kpi-graph-legend-item">
-                    {getLegendShapeSvg('Workbook', ACTION_COLORS.merge)}
+                    {getLegendShapeSvg('Report', ACTION_COLORS.merge)}
                     <span className="kpi-graph-legend-label">Merge</span>
                   </div>
                   <div className="kpi-graph-legend-item">
-                    {getLegendShapeSvg('Workbook', ACTION_COLORS.decommission)}
+                    {getLegendShapeSvg('Report', ACTION_COLORS.decommission)}
                     <span className="kpi-graph-legend-label">Decommission</span>
                   </div>
                 </>

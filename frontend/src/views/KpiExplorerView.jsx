@@ -23,7 +23,7 @@ export default function KpiExplorerView() {
     <div className="page-enter">
       <PageHeader
         title="Shared Metrics"
-        subtitle="Business metrics that appear across workbooks — useful for spotting overlap and duplicate reports."
+        subtitle="Business metrics that appear across reports — useful for spotting overlap and duplicate reports."
         actions={(
           <div style={{ position: 'relative' }}>
             <Search size={16} style={{
@@ -54,14 +54,14 @@ export default function KpiExplorerView() {
         <EmptyState
           icon={Tags}
           title="No metrics grouped yet"
-          message="Run BI Intelligence after uploading workbooks to group similar metrics together."
+          message="Run BI Intelligence after uploading reports to group similar metrics together."
         />
       ) : (
         <>
           {multiWb.length > 0 && (
             <div style={{ marginBottom: 32 }}>
               <h3 className="section-title" style={{ marginBottom: 12 }}>
-                Used in multiple workbooks ({multiWb.length})
+                Used in multiple reports ({multiWb.length})
               </h3>
               <p className="text-secondary" style={{ fontSize: '0.85rem', marginBottom: 12 }}>
                 These metrics appear in more than one file — they may indicate duplicate or overlapping reports.
@@ -75,7 +75,7 @@ export default function KpiExplorerView() {
           {singleWb.length > 0 && (
             <div>
               <h3 className="section-title" style={{ marginBottom: 12 }}>
-                Used in one workbook only ({singleWb.length})
+                Used in one report only ({singleWb.length})
               </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {singleWb.map((c, i) => <ClusterCard key={i} cluster={c} />)}
@@ -103,7 +103,7 @@ function ClusterCard({ cluster, highlight }) {
           <h3 style={{ fontSize: '0.95rem' }}>{cluster.canonical_name}</h3>
           {cluster.workbook_count > 1 && (
             <span className="badge badge-blue">
-              <FileSpreadsheet size={11} /> {cluster.workbook_count} workbooks
+              <FileSpreadsheet size={11} /> {cluster.workbook_count} reports
             </span>
           )}
         </div>

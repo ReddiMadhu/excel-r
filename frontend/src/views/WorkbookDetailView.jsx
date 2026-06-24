@@ -90,7 +90,7 @@ export default function WorkbookDetailView() {
           </h3>
           {displayAction === 'decommission' && rec.merge_with_name && (
             <p className="text-secondary" style={{ marginBottom: 8 }}>
-              <strong>Decommission this workbook</strong> — retain &quot;{rec.merge_with_name}&quot;
+              <strong>Decommission this report</strong> — retain &quot;{rec.merge_with_name}&quot;
             </p>
           )}
           {displayAction === 'merge' && rec.merge_with_name && (
@@ -124,7 +124,7 @@ function filterDecommissionReasons(reasons) {
   return (reasons || []).filter(r => {
     const lower = r.toLowerCase();
     return !lower.includes('fingerprint')
-      && !lower.includes('retained workbook')
+      && !lower.includes('retained report')
       && !lower.includes('retained over');
   });
 }

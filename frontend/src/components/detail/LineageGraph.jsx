@@ -48,7 +48,7 @@ function FormulaNode({ data }) {
       />
       <div style={{ fontWeight: 600, fontSize: '0.875rem', marginBottom: 4 }}>{data.label}</div>
       <div style={{ fontSize: '10px', opacity: 0.9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>
-        {data.table_name ? `${data.table_name}` : 'Workbook'}
+        {data.table_name ? `${data.table_name}` : 'Report'}
       </div>
       {data.formula && (
         <div style={{ fontSize: '10px', opacity: 0.8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: "'JetBrains Mono', monospace" }} title={data.formula}>

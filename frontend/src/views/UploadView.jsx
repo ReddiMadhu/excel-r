@@ -53,7 +53,7 @@ export default function UploadView() {
     <div className="page-enter">
       <div className="animate-fade-in">
         <PageHeader
-          title="Upload Workbooks"
+          title="Upload Reports"
           subtitle="Upload runs BI Discovery only (fast extraction). Run Intelligence and Rationalization from their sidebar agents when you are ready."
         />
 
@@ -82,12 +82,14 @@ export default function UploadView() {
           style={isUploading ? { opacity: 0.6, cursor: 'not-allowed' } : {}}
         >
           <div className="dropzone-icon"><Upload size={24} /></div>
-          <h3>Drag & drop Excel files here</h3>
-          <p>Or click to browse. Only .xlsx files accepted.</p>
+          <h3>Drag & drop Excel files or folders here</h3>
+          <p>Or click to browse folders. Only .xlsx files are processed.</p>
           <input
             ref={fileInputRef}
             type="file"
             multiple
+            webkitdirectory=""
+            directory=""
             accept=".xlsx"
             style={{ display: 'none' }}
             onChange={(e) => addFiles(e.target.files)}
@@ -99,7 +101,7 @@ export default function UploadView() {
         {selectedFiles.length > 0 && (
           <div className="animate-slide-up" style={{ marginTop: 24 }}>
             <p className="text-secondary" style={{ fontSize: '0.8rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 12 }}>
-              Selected Workbooks ({selectedFiles.length})
+              Selected Reports ({selectedFiles.length})
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
               {selectedFiles.map((file, idx) => (
@@ -133,7 +135,7 @@ export default function UploadView() {
                       {file.name}
                     </p>
                     <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                      {(file.size / 1024 / 1024).toFixed(2)} MB &middot; Excel Workbook
+                      {(file.size / 1024 / 1024).toFixed(2)} MB &middot; Excel Report
                     </p>
                   </div>
                   <button

@@ -52,6 +52,11 @@ export const api = {
   getRisks: () => fetchJson('/api/governance/risks'),
   getPairwiseMatrix: (workbookIds) =>
     fetchJson(`/api/governance/pairwise${workbookIds ? '?workbook_ids=' + workbookIds : ''}`),
+  sendEmailToTeam: (data) => fetchJson('/api/governance/send-email', {
+    method: 'POST',
+    body: JSON.stringify(data),
+    headers: { 'Content-Type': 'application/json' },
+  }),
 
   // Agents (decentralized pipelines)
   getAgentsStatus: () => fetchJson('/api/agents/status'),

@@ -52,7 +52,7 @@ export default function RationalizationDetailView() {
           <ArrowLeft size={16} /> Back to Rationalization
         </button>
         <div className="card" style={{ padding: 40, textAlign: 'center' }}>
-          <p style={{ color: 'var(--text-muted)' }}>Workbook recommendation not found.</p>
+          <p style={{ color: 'var(--text-muted)' }}>Report recommendation not found.</p>
         </div>
       </div>
     );
@@ -67,8 +67,8 @@ export default function RationalizationDetailView() {
   const typeConfig = {
     merge: {
       icon: GitMerge,
-      title: 'Consolidation Merger Review',
-      subtitle: 'Compare metrics, data sources, and KPIs side-by-side to review consolidating these workbooks.',
+      title: 'Merge Review',
+      subtitle: 'Compare metrics, data sources, and KPIs side-by-side to review merging these reports.',
       color: 'var(--accent-amber)',
       iconClass: 'merge',
     },
@@ -81,8 +81,8 @@ export default function RationalizationDetailView() {
     },
     keep: {
       icon: CheckCircle,
-      title: 'Keep & Certify Review',
-      subtitle: 'Review KPIs, data sources, and governance status of this certified workbook.',
+      title: 'Keep Review',
+      subtitle: 'Review KPIs, data sources, and governance status of this certified report.',
       color: 'var(--accent-emerald)',
       iconClass: 'keep',
     },
@@ -121,7 +121,7 @@ export default function RationalizationDetailView() {
               <span className="review-detail-col-label" style={{ color: config.color }}>
                 {type === 'merge' ? 'Source — Merge Candidate' :
                  type === 'decommission' ? 'Decommission Candidate' :
-                 'Certified Workbook'}
+                 'Certified Report'}
               </span>
               <h2 className="review-detail-col-name">{rec.workbook_name}</h2>
             </div>
@@ -149,7 +149,7 @@ export default function RationalizationDetailView() {
             {rec.common_kpis && rec.common_kpis.length > 0 && (
               <div className="review-detail-section">
                 <h3 className="review-detail-section-title">
-                  {type === 'merge' ? 'Shared KPIs' : 'KPIs in This Workbook'}
+                  {type === 'merge' ? 'Shared KPIs' : 'KPIs in This Report'}
                 </h3>
                 <div className="review-detail-kpi-list">
                   {rec.common_kpis.map((k, i) => (
@@ -164,15 +164,15 @@ export default function RationalizationDetailView() {
               </div>
             )}
 
-            {/* Rationale */}
-            {reasons.length > 0 && (
+            {/* Rationale (for non-decommission actions) */}
+            {type !== 'decommission' && reasons.length > 0 && (
               <div className="review-detail-section">
                 <h3 className="review-detail-section-title">Governance Rationale</h3>
                 <div className="review-detail-rationale">
                   {reasons.map((r, i) => (
                     <div key={i} className="review-detail-rationale-item">
                       <span className="review-detail-rationale-icon" style={{ color: config.color }}>
-                        {type === 'decommission' ? '▲' : type === 'merge' ? '!' : '✓'}
+                        {type === 'merge' ? '!' : '✓'}
                       </span>
                       <span>{r}</span>
                     </div>
@@ -181,29 +181,21 @@ export default function RationalizationDetailView() {
               </div>
             )}
 
-            {/* AI Justification */}
-            {rec.llm_justification && (
+            {/* AI Justification (for non-decommission actions) */}
+            {type !== 'decommission' && rec.llm_justification && (
               <div className="review-detail-ai">
                 <Sparkles size={14} style={{ flexShrink: 0 }} />
                 <span>{rec.llm_justification}</span>
               </div>
             )}
-
-            {/* Retain target for decommission */}
-            {type === 'decommission' && rec.merge_with_name && (
-              <div className="review-detail-retain">
-                <div className="review-detail-retain-label">Retain Target</div>
-                <div className="review-detail-retain-name">{rec.merge_with_name}</div>
-              </div>
-            )}
           </div>
 
-          {/* Target Column (for merge) */}
-          {type === 'merge' && (
+          {/* Target Column (for merge OR decommission with a retain target) */}
+          {(type === 'merge' || (type === 'decommission' && rec.merge_with_name)) && (
             <div className="review-detail-col">
               <div className="review-detail-col-header" style={{ borderColor: 'var(--accent-emerald)' }}>
                 <span className="review-detail-col-label" style={{ color: 'var(--accent-emerald)' }}>
-                  Target — Consolidation Destination
+                  {type === 'merge' ? 'Target — Consolidation Destination' : 'Retain Target — Destination'}
                 </span>
                 <h2 className="review-detail-col-name">{rec.merge_with_name || '—'}</h2>
               </div>
@@ -234,7 +226,7 @@ export default function RationalizationDetailView() {
                     </div>
                   </div>
 
-                  {target.common_kpis && target.common_kpis.length > 0 && (
+                  {type !== 'decommission' && target.common_kpis && target.common_kpis.length > 0 && (
                     <div className="review-detail-section">
                       <h3 className="review-detail-section-title">Its KPIs</h3>
                       <div className="review-detail-kpi-list">
@@ -271,57 +263,55 @@ export default function RationalizationDetailView() {
 
               {!target && (
                 <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  Target workbook details not available in current recommendations.
+                  Target report details not available in current recommendations.
                 </div>
               )}
-            </div>
-          )}
-
-          {/* Rationale Column (for decommission) */}
-          {type === 'decommission' && (
-            <div className="review-detail-col">
-              <div className="review-detail-col-header" style={{ borderColor: 'var(--accent-rose)' }}>
-                <span className="review-detail-col-label" style={{ color: 'var(--accent-rose)' }}>
-                  Governance Rationale
-                </span>
-                <h2 className="review-detail-col-name" style={{ fontSize: '1rem' }}>Why Decommission?</h2>
-              </div>
-
-              {rec.llm_justification && (
-                <div className="review-detail-ai">
-                  <Sparkles size={14} style={{ flexShrink: 0 }} />
-                  <span>{rec.llm_justification}</span>
-                </div>
-              )}
-
-              {reasons.length > 0 && (
-                <div className="review-detail-section">
-                  <h3 className="review-detail-section-title">Platform Cleanliness Violations</h3>
-                  <div className="review-detail-rationale">
-                    {reasons.map((r, i) => (
-                      <div key={i} className="review-detail-rationale-item">
-                        <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-rose)' }}>▲</span>
-                        <span>{r}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="review-detail-impact">
-                <strong>Governance Impact Alert:</strong> This action will archive the workbook metadata,
-                disconnect datasource references, and flag it in the repository index for cleanup.
-              </div>
             </div>
           )}
         </div>
+
+        {/* Decommission Rationale at the bottom/end */}
+        {type === 'decommission' && (
+          <div className="review-detail-decommission-footer-section" style={{ marginTop: 24, padding: 20, background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', borderLeft: '4px solid var(--accent-rose)' }}>
+            <h3 style={{ margin: '0 0 12px 0', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--accent-rose)' }}>
+              <Trash2 size={18} />
+              Decommission Governance & Cleanliness Rationale
+            </h3>
+            
+            {rec.llm_justification && (
+              <div className="review-detail-ai" style={{ marginBottom: 16 }}>
+                <Sparkles size={14} style={{ flexShrink: 0 }} />
+                <span>{rec.llm_justification}</span>
+              </div>
+            )}
+
+            {reasons.length > 0 && (
+              <div className="review-detail-section" style={{ marginBottom: 16 }}>
+                <h4 className="review-detail-section-title" style={{ fontSize: '0.85rem', color: 'var(--text-primary)', marginBottom: 8 }}>Platform Cleanliness Violations</h4>
+                <div className="review-detail-rationale">
+                  {reasons.map((r, i) => (
+                    <div key={i} className="review-detail-rationale-item">
+                      <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-rose)' }}>▲</span>
+                      <span>{r}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="review-detail-impact" style={{ margin: 0, padding: 12, background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--accent-rose)' }}>
+              <strong>Governance Impact Alert:</strong> This action will archive the report metadata,
+              disconnect datasource references, and flag it in the repository index for cleanup.
+            </div>
+          </div>
+        )}
 
         {/* Graph Section with Legend */}
         <div className="review-detail-graph-section">
           <div className="review-detail-graph-header">
             <div className="review-detail-graph-title" style={{ color: config.color }}>
               <TrendingUp size={18} />
-              <span>{type === 'merge' ? 'Visual Lineage & Common Connections' : 'Workbook Connections Lineage'}</span>
+              <span>{type === 'merge' ? 'Visual Lineage & Common Connections' : 'Report Connections Lineage'}</span>
             </div>
           </div>
 
@@ -332,7 +322,7 @@ export default function RationalizationDetailView() {
                 view={type === 'keep' || !rec.merge_with_id ? 'landscape' : 'rationalization'}
                 workbookId={type === 'keep' || !rec.merge_with_id ? workbookId : undefined}
                 workbookIds={type === 'keep' || !rec.merge_with_id ? undefined : graphWorkbookIds}
-                height="420px"
+                height="550px"
               />
             </div>
           </div>
@@ -342,9 +332,8 @@ export default function RationalizationDetailView() {
         <div className="review-detail-footer">
           <div className="review-detail-footer-info" style={{ color: config.color }}>
             <TrendingUp size={14} />
-            {type === 'merge' && 'Consolidating reduces redundant workbook maintenance'}
-            {type === 'decommission' && 'Archiving this workbook frees up resources and reduces portfolio clutter'}
-            {type === 'keep' && 'This workbook is certified and actively maintained'}
+            {type === 'merge' && 'Merging reduces redundant report maintenance'}
+            {type === 'keep' && 'This report is certified and actively maintained'}
           </div>
           <div className="review-detail-footer-actions">
             <button className="btn-cancel" onClick={() => navigate('/rationalization')}>

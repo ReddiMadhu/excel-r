@@ -125,9 +125,9 @@ def main():
     print(f"   {'Name':<50} {'Sheets':>6} {'CalcF':>6} {'Complexity':>10}")
     print("   " + "-" * 75)
     for wb in workbooks:
-        print(f"   {wb['name']:<50} {wb.get('sheet_count', 0):>6} "
-              f"{wb.get('calculated_field_count', 0):>6} "
-              f"{wb.get('extraction_complexity', 'N/A'):>10}")
+        print(f"   {wb['name']:<50} {str(wb.get('sheet_count') or 0):>6} "
+              f"{str(wb.get('calculated_field_count') or 0):>6} "
+              f"{str(wb.get('extraction_complexity') or 'N/A'):>10}")
 
     # 5. KPI Clusters (cross-workbook overlap indicator)
     print(f"\n5. KPI Clusters ({len(kpi_clusters)} canonical groups):")
@@ -152,9 +152,9 @@ def main():
         print(f"   - \"{rec.get('workbook_name', '?')}\" -> {rec['action'].upper()}")
         if rec.get("merge_with_name"):
             print(f"     Merge with: \"{rec['merge_with_name']}\"")
-        print(f"     KPI overlap: {rec.get('kpi_overlap_score', 0):.0%}, "
-              f"DS overlap: {rec.get('datasource_overlap_score', 0):.0%}, "
-              f"Uniqueness: {rec.get('uniqueness_score', 0):.2f}")
+        print(f"     KPI overlap: {rec.get('kpi_overlap_score') or 0:.0%}, "
+              f"DS overlap: {rec.get('datasource_overlap_score') or 0:.0%}, "
+              f"Uniqueness: {rec.get('uniqueness_score') or 0:.2f}")
         if rec.get("common_kpis"):
             print(f"     Common KPIs: {rec['common_kpis'][:5]}")
         if rec.get("reasons"):

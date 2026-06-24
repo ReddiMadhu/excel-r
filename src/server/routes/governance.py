@@ -6,6 +6,7 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
 from src.server.models.database import get_database
 from src.server.models.schemas import (
@@ -152,3 +153,15 @@ async def list_risks():
         )
         for r in rows
     ]
+
+
+class SendEmailRequest(BaseModel):
+    email: str
+
+
+@router.post("/send-email")
+async def send_email_to_team(req: SendEmailRequest):
+    """Simulate sending the rationalization results email to the governance team."""
+    logger.info("Governance team notified at %s: rationalization results compiled.", req.email)
+    return {"status": "success", "message": f"Governance report has been successfully emailed to {req.email}."}
+

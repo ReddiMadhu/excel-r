@@ -124,7 +124,7 @@ def build_graph_data(
     for dash in matched_dashboards:
         if dash.get("sheet_type") == "raw_data":
             wb_id = f"wb_{dash['workbook_id']}"
-            add_node(wb_id, "Workbook", dash["workbook_name"])
+            add_node(wb_id, "Report", dash["workbook_name"])
             
             ds_id = f"ds_{dash['name'].lower().replace(' ', '_')}"
             add_node(ds_id, "Datasource", dash["name"], {
@@ -146,7 +146,7 @@ def build_graph_data(
             continue
 
         wb_id = f"wb_{dash['workbook_id']}"
-        add_node(wb_id, "Workbook", dash["workbook_name"])
+        add_node(wb_id, "Report", dash["workbook_name"])
 
         lob = dash.get("line_of_business")
         if lob:
@@ -284,7 +284,7 @@ def build_rationalization_graph(workbook_ids: Optional[List[int]] = None):
                 reasons = [reasons]
         add_node(
             f"wb_{wb['id']}",
-            "Workbook",
+            "Report",
             wb["name"],
             {
                 "workbook_id": wb["id"],

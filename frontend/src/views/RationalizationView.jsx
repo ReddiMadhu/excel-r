@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle, GitMerge, Trash2, AlertCircle, Search,
-  ChevronRight, X, ArrowRight, TrendingUp, Sparkles,
+  ChevronRight, X, ArrowRight, TrendingUp, Sparkles, Mail,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
@@ -13,6 +13,56 @@ export default function RationalizationView() {
   const { data: recs, loading } = useApi(api.getRecommendations);
   const { data: pairwise, loading: pwLoading } = useApi(api.getPairwiseMatrix);
   const navigate = useNavigate();
+
+  // Email Modal states
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [emailInput, setEmailInput] = useState('governance-team@company.com');
+  const [emailStep, setEmailStep] = useState('input'); // 'input' | 'sending' | 'success' | 'error'
+  const [emailMessage, setEmailMessage] = useState('');
+
+  const handleOpenEmailModal = () => {
+    setEmailStep('input');
+    setEmailMessage('');
+    setEmailModalOpen(true);
+  };
+
+  const handleSendEmail = async (e) => {
+    if (e) e.preventDefault();
+    if (!emailInput || !emailInput.includes('@')) {
+      alert('Please enter a valid email address.');
+      return;
+    }
+    setEmailStep('sending');
+    try {
+      const res = await api.sendEmailToTeam({ email: emailInput });
+      setEmailMessage(res.message || `Governance report successfully emailed to ${emailInput}.`);
+      setEmailStep('success');
+    } catch (err) {
+      console.error(err);
+      setEmailMessage(err.message || 'Failed to dispatch governance email.');
+      setEmailStep('error');
+    }
+  };
+
+  // Compute sharing map for KPIs
+  const kpiSharingMap = useMemo(() => {
+    if (!recs) return {};
+    const map = {};
+    recs.forEach(r => {
+      if (r.common_kpis) {
+        r.common_kpis.forEach(k => {
+          if (!map[k]) map[k] = new Set();
+          if (r.workbook_name) map[k].add(r.workbook_name);
+          if (r.merge_with_name) map[k].add(r.merge_with_name);
+        });
+      }
+    });
+    const result = {};
+    for (const k in map) {
+      result[k] = Array.from(map[k]).sort();
+    }
+    return result;
+  }, [recs]);
 
   // Filter state
   const [activeTab, setActiveTab] = useState('all');
@@ -114,7 +164,27 @@ export default function RationalizationView() {
 
   return (
     <div className="page-enter">
-      <PageHeader title="Rationalization Results" />
+      <PageHeader
+        title="Rationalization Results"
+        actions={
+          <button
+            onClick={handleOpenEmailModal}
+            className="btn btn-primary"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: '0.85rem',
+              padding: '6px 12px',
+              cursor: 'pointer'
+            }}
+            title="Send rationalization results to governance team via email"
+          >
+            <Mail size={15} />
+            Send Email to Team
+          </button>
+        }
+      />
 
 
 
@@ -122,7 +192,7 @@ export default function RationalizationView() {
         <EmptyState
           icon={GitMerge}
           title="No recommendations yet"
-          message="Upload multiple workbooks and the rationalization engine will produce recommendations."
+          message="Upload multiple reports and the rationalization engine will produce recommendations."
         />
       ) : (
         <div>
@@ -132,7 +202,7 @@ export default function RationalizationView() {
               <Search />
               <input
                 type="text"
-                placeholder="Search workbook or dashboard..."
+                placeholder="Search report or dashboard..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -143,7 +213,7 @@ export default function RationalizationView() {
               value={selectedWorkbook}
               onChange={(e) => setSelectedWorkbook(e.target.value)}
             >
-              <option value="all">All Workbooks</option>
+              <option value="all">All Reports</option>
               {workbookNames.map((wb, i) => (
                 <option key={i} value={wb}>{wb}</option>
               ))}
@@ -201,14 +271,14 @@ export default function RationalizationView() {
               {/* Merge Column */}
               <div className="ration-column">
                 <ColumnHeader
-                  label="CONSOLIDATE & MERGE"
+                  label="MERGE"
                   color="var(--accent-amber)"
                   count={mergeRecs.length}
                   badge="merge"
                   badgeText="Redundant"
                 />
                 {mergeRecs.length > 0 ? mergeRecs.map(rec => (
-                  <RecCard key={rec.id} rec={rec} type="merge" onReview={() => goToReview(rec, 'merge')} />
+                  <RecCard key={rec.id} rec={rec} type="merge" onReview={() => goToReview(rec, 'merge')} kpiSharingMap={kpiSharingMap} />
                 )) : <div className="ration-empty">No merge recommendations</div>}
               </div>
 
@@ -222,21 +292,21 @@ export default function RationalizationView() {
                   badgeText="Inactive"
                 />
                 {decommissionFiltered.length > 0 ? decommissionFiltered.map(rec => (
-                  <RecCard key={rec.id} rec={rec} type="decommission" onReview={() => goToReview(rec, 'decommission')} />
+                  <RecCard key={rec.id} rec={rec} type="decommission" onReview={() => goToReview(rec, 'decommission')} kpiSharingMap={kpiSharingMap} />
                 )) : <div className="ration-empty">No decommission recommendations</div>}
               </div>
 
               {/* Keep Column */}
               <div className="ration-column">
                 <ColumnHeader
-                  label="KEEP & CERTIFY"
+                  label="KEEP"
                   color="var(--accent-emerald)"
                   count={keepRecs.length}
                   badge="keep"
                   badgeText="Active"
                 />
                 {keepRecs.length > 0 ? keepRecs.map(rec => (
-                  <RecCard key={rec.id} rec={rec} type="keep" onReview={() => goToReview(rec, 'keep')} />
+                  <RecCard key={rec.id} rec={rec} type="keep" onReview={() => goToReview(rec, 'keep')} kpiSharingMap={kpiSharingMap} />
                 )) : <div className="ration-empty">No keep recommendations</div>}
               </div>
             </div>
@@ -244,9 +314,9 @@ export default function RationalizationView() {
             <div className="ration-grid single-col">
               {activeTab === 'merge' && (
                 <div className="ration-column">
-                  <ColumnHeader label="CONSOLIDATE & MERGE" color="var(--accent-amber)" count={mergeRecs.length} badge="merge" badgeText="Redundant" />
+                  <ColumnHeader label="MERGE" color="var(--accent-amber)" count={mergeRecs.length} badge="merge" badgeText="Redundant" />
                   {mergeRecs.length > 0 ? mergeRecs.map(rec => (
-                    <RecCard key={rec.id} rec={rec} type="merge" onReview={() => goToReview(rec, 'merge')} />
+                    <RecCard key={rec.id} rec={rec} type="merge" onReview={() => goToReview(rec, 'merge')} kpiSharingMap={kpiSharingMap} />
                   )) : <div className="ration-empty">No merge recommendations</div>}
                 </div>
               )}
@@ -254,15 +324,15 @@ export default function RationalizationView() {
                 <div className="ration-column">
                   <ColumnHeader label="DECOMMISSION" color="var(--accent-rose)" count={decommissionFiltered.length} badge="decommission" badgeText="Inactive" />
                   {decommissionFiltered.length > 0 ? decommissionFiltered.map(rec => (
-                    <RecCard key={rec.id} rec={rec} type="decommission" onReview={() => goToReview(rec, 'decommission')} />
+                    <RecCard key={rec.id} rec={rec} type="decommission" onReview={() => goToReview(rec, 'decommission')} kpiSharingMap={kpiSharingMap} />
                   )) : <div className="ration-empty">No decommission recommendations</div>}
                 </div>
               )}
               {activeTab === 'keep' && (
                 <div className="ration-column">
-                  <ColumnHeader label="KEEP & CERTIFY" color="var(--accent-emerald)" count={keepRecs.length} badge="keep" badgeText="Active" />
+                  <ColumnHeader label="KEEP" color="var(--accent-emerald)" count={keepRecs.length} badge="keep" badgeText="Active" />
                   {keepRecs.length > 0 ? keepRecs.map(rec => (
-                    <RecCard key={rec.id} rec={rec} type="keep" onReview={() => goToReview(rec, 'keep')} />
+                    <RecCard key={rec.id} rec={rec} type="keep" onReview={() => goToReview(rec, 'keep')} kpiSharingMap={kpiSharingMap} />
                   )) : <div className="ration-empty">No keep recommendations</div>}
                 </div>
               )}
@@ -270,7 +340,7 @@ export default function RationalizationView() {
                 <div className="ration-column">
                   <ColumnHeader label="REVIEW" color="#3b82f6" count={reviewRecs.length} badge="review" badgeText="Needs Attention" />
                   {reviewRecs.length > 0 ? reviewRecs.map(rec => (
-                    <RecCard key={rec.id} rec={rec} type="review" />
+                    <RecCard key={rec.id} rec={rec} type="review" kpiSharingMap={kpiSharingMap} />
                   )) : <div className="ration-empty">No review recommendations</div>}
                 </div>
               )}
@@ -306,6 +376,89 @@ export default function RationalizationView() {
         </div>
       )}
 
+      {/* Email dispatch Modal */}
+      {emailModalOpen && (
+        <div className="email-modal-backdrop" onClick={() => setEmailModalOpen(false)}>
+          <div className="email-modal-card" onClick={(e) => e.stopPropagation()}>
+            <button className="email-modal-close" onClick={() => setEmailModalOpen(false)}>
+              <X size={18} />
+            </button>
+            
+            {emailStep === 'input' && (
+              <form onSubmit={handleSendEmail} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--accent-blue)', marginBottom: 4 }}>
+                  <Mail size={22} />
+                  <h3 style={{ margin: 0, fontSize: '1.15rem' }}>Send Governance Report</h3>
+                </div>
+                <p className="text-secondary" style={{ fontSize: '0.85rem', margin: 0 }}>
+                  Send the compiled BI rationalization and redundancy report directly to the team via email.
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>TEAM EMAIL ADDRESS</label>
+                  <input
+                    type="email"
+                    required
+                    className="email-modal-input"
+                    placeholder="e.g. governance-team@company.com"
+                    value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+                  <button type="button" className="btn btn-ghost" onClick={() => setEmailModalOpen(false)}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    Send Report
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {emailStep === 'sending' && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 0', gap: 16 }}>
+                <div className="email-modal-spinner" />
+                <div style={{ textAlign: 'center' }}>
+                  <h3 style={{ margin: '0 0 6px 0', fontSize: '1rem' }}>Dispatching Report</h3>
+                  <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0 }}>Compiling overlap models and sending to {emailInput}...</p>
+                </div>
+              </div>
+            )}
+
+            {emailStep === 'success' && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 0', gap: 16 }}>
+                <div className="email-modal-success-icon">✓</div>
+                <div style={{ textAlign: 'center' }}>
+                  <h3 style={{ margin: '0 0 6px 0', fontSize: '1.1rem', color: 'var(--accent-emerald)' }}>Report Dispatched</h3>
+                  <p className="text-secondary" style={{ fontSize: '0.85rem', margin: 0 }}>{emailMessage}</p>
+                </div>
+                <button className="btn btn-primary" onClick={() => setEmailModalOpen(false)} style={{ marginTop: 8 }}>
+                  Done
+                </button>
+              </div>
+            )}
+
+            {emailStep === 'error' && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 0', gap: 16 }}>
+                <div className="email-modal-error-icon">!</div>
+                <div style={{ textAlign: 'center' }}>
+                  <h3 style={{ margin: '0 0 6px 0', fontSize: '1.1rem', color: 'var(--accent-rose)' }}>Dispatch Failed</h3>
+                  <p className="text-secondary" style={{ fontSize: '0.85rem', margin: 0 }}>{emailMessage}</p>
+                </div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                  <button className="btn btn-ghost" onClick={() => setEmailModalOpen(false)}>
+                    Close
+                  </button>
+                  <button className="btn btn-primary" onClick={() => handleSendEmail()}>
+                    Retry
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
     </div>
   );
@@ -358,7 +511,7 @@ function scoreColor(pct, inverse) {
   return pct >= 70 ? 'var(--accent-rose)' : pct >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)';
 }
 
-function RecCard({ rec, type, onReview }) {
+function RecCard({ rec, type, onReview, kpiSharingMap }) {
   const reasons = cleanReasons(rec.reasons);
   const kpiPct = ((rec.kpi_overlap_score || 0) * 100).toFixed(0);
   const dsPct = ((rec.datasource_overlap_score || 0) * 100).toFixed(0);
@@ -429,9 +582,22 @@ function RecCard({ rec, type, onReview }) {
         <div className="rec-card-kpis">
           <div className="rec-card-kpis-label">Common KPIs</div>
           <div className="rec-card-kpis-tags">
-            {rec.common_kpis.map((k, i) => (
-              <span key={i} className="rec-kpi-tag">{k}</span>
-            ))}
+            {rec.common_kpis.map((k, i) => {
+              const sharingReports = (kpiSharingMap[k] || []).filter(name => name !== rec.workbook_name);
+              const tooltipText = sharingReports.length > 0
+                ? `Shared with: ${sharingReports.join(', ')}`
+                : 'Shared KPI';
+              return (
+                <span key={i} className="rec-kpi-tag" title={tooltipText}>
+                  {k}
+                  {sharingReports.length > 0 && (
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 4 }}>
+                      ({sharingReports.length})
+                    </span>
+                  )}
+                </span>
+              );
+            })}
           </div>
         </div>
       )}

@@ -16,7 +16,7 @@ export const agents = [
       { id: 'portfolio', label: 'Portfolio', path: '/discovery', Component: PortfolioView },
     ],
     metrics: (m) => [
-      { label: 'Workbooks', value: m.workbookCount },
+      { label: 'Reports', value: m.workbookCount },
       { label: 'Sheets', value: m.sheetCount },
       { label: 'Datasources', value: m.datasourceCount },
     ],
@@ -26,7 +26,7 @@ export const agents = [
     path: '/intelligence',
     label: 'BI Intelligence',
     icon: Sparkles,
-    description: 'Shared business metrics and KPI groups across workbooks',
+    description: 'Shared business metrics and KPI groups across reports',
     routes: ['/intelligence'],
     tabs: [
       { id: 'metrics', label: 'Shared Metrics', path: '/intelligence', Component: KpiExplorerView },

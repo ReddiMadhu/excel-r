@@ -10,7 +10,7 @@ import { StatCard, Loader, EmptyState } from '../components/shared';
 import PageHeader from '../components/layout/PageHeader';
 
 const VIEW_MODES = [
-  { id: 'list', label: 'All Workbooks', icon: List },
+  { id: 'list', label: 'All Reports', icon: List },
 ];
 
 function effectiveRecAction(wbId, rec, allRecs) {
@@ -104,7 +104,7 @@ function GroupSection({ title, subtitle, workbookIds, catalogMap, workbooks, rec
           {subtitle && <div className="portfolio-group-subtitle">{subtitle}</div>}
         </div>
         <span className="badge badge-blue">
-          {items.length} workbook{items.length !== 1 ? 's' : ''}
+          {items.length} report{items.length !== 1 ? 's' : ''}
         </span>
       </button>
 
@@ -193,7 +193,7 @@ export default function PortfolioView() {
       />
 
       <div className="stat-grid">
-        <StatCard icon={FileSpreadsheet} value={(workbooks || []).length} label="Workbooks" color="blue" />
+        <StatCard icon={FileSpreadsheet} value={(workbooks || []).length} label="Reports" color="blue" />
         <StatCard icon={BarChart3} value={totalSheets} label="Sheets" color="purple" />
         <StatCard icon={Database} value={totalDatasources} label="Datasources" color="emerald" />
       </div>
@@ -201,7 +201,7 @@ export default function PortfolioView() {
       {(!workbooks || workbooks.length === 0) ? (
         <EmptyState
           icon={FileSpreadsheet}
-          title="No workbooks yet"
+          title="No reports yet"
           message="Upload Excel files to get started with rationalization."
         />
       ) : (
