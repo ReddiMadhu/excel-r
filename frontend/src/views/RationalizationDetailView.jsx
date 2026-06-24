@@ -19,12 +19,43 @@ function cleanReasons(reasons) {
   });
 }
 
+function getWorkbookKpis(wId, fields, clusters) {
+  if (!fields || !clusters) return [];
+  
+  const canonMap = {};
+  clusters.forEach(c => {
+    if (c.original_names) {
+      c.original_names.forEach(orig => {
+        canonMap[orig.toLowerCase()] = c.canonical_name;
+      });
+    }
+  });
+
+  const wbFields = fields.filter(
+    cf => cf.workbook_id === wId && 
+    (cf.column_type === 'formula_based' || cf.column_type === 'pivot_value')
+  );
+
+  const kpiSet = new Set();
+  wbFields.forEach(cf => {
+    const origLower = cf.name.toLowerCase();
+    const canonName = canonMap[origLower] || cf.name;
+    kpiSet.add(canonName);
+  });
+
+  return Array.from(kpiSet);
+}
+
 export default function RationalizationDetailView() {
   const { type, id } = useParams();
   const navigate = useNavigate();
   const workbookId = parseInt(id, 10);
 
-  const { data: recs, loading } = useApi(api.getRecommendations);
+  const { data: recs, loading: recsLoading } = useApi(api.getRecommendations);
+  const { data: allCalculatedFields, loading: fieldsLoading } = useApi(api.getCalculatedFields);
+  const { data: allClusters, loading: clustersLoading } = useApi(api.getKpiClusters);
+
+  const loading = recsLoading || fieldsLoading || clustersLoading;
 
   const rec = useMemo(() => {
     if (!recs) return null;
@@ -43,6 +74,35 @@ export default function RationalizationDetailView() {
     return ids;
   }, [workbookId, rec]);
 
+  const sourceKpis = useMemo(() => {
+    return getWorkbookKpis(workbookId, allCalculatedFields, allClusters);
+  }, [workbookId, allCalculatedFields, allClusters]);
+
+  const targetKpis = useMemo(() => {
+    if (!rec || !rec.merge_with_id) return [];
+    return getWorkbookKpis(rec.merge_with_id, allCalculatedFields, allClusters);
+  }, [rec, allCalculatedFields, allClusters]);
+
+  const { sharedKpis, sourceOnlyKpis, targetOnlyKpis } = useMemo(() => {
+    const sourceKpiSet = new Set(sourceKpis);
+    const targetKpiSet = new Set(targetKpis);
+
+    const shared = sourceKpis.filter(k => targetKpiSet.has(k));
+    shared.sort((a, b) => a.localeCompare(b));
+
+    const sourceOnly = sourceKpis.filter(k => !targetKpiSet.has(k));
+    sourceOnly.sort((a, b) => a.localeCompare(b));
+
+    const targetOnly = targetKpis.filter(k => !sourceKpiSet.has(k));
+    targetOnly.sort((a, b) => a.localeCompare(b));
+
+    return {
+      sharedKpis: shared,
+      sourceOnlyKpis: sourceOnly,
+      targetOnlyKpis: targetOnly,
+    };
+  }, [sourceKpis, targetKpis]);
+
   if (loading) return <Loader />;
 
   if (!rec) {
@@ -59,10 +119,11 @@ export default function RationalizationDetailView() {
   }
 
   const reasons = cleanReasons(rec.reasons);
-  const commonKpis = new Set(rec.common_kpis || []);
   const kpiPct = ((rec.kpi_overlap_score || 0) * 100).toFixed(0);
   const dsPct = ((rec.datasource_overlap_score || 0) * 100).toFixed(0);
   const uniqPct = ((rec.uniqueness_score || 0) * 100).toFixed(0);
+
+
 
   const typeConfig = {
     merge: {
@@ -146,18 +207,21 @@ export default function RationalizationDetailView() {
             </div>
 
             {/* KPIs */}
-            {rec.common_kpis && rec.common_kpis.length > 0 && (
+            {(sharedKpis.length > 0 || sourceOnlyKpis.length > 0) && (
               <div className="review-detail-section">
                 <h3 className="review-detail-section-title">
                   {type === 'merge' ? 'Shared KPIs' : 'KPIs in This Report'}
                 </h3>
                 <div className="review-detail-kpi-list">
-                  {rec.common_kpis.map((k, i) => (
-                    <div key={i} className="review-detail-kpi-item shared">
+                  {sharedKpis.map((k, i) => (
+                    <div key={`shared-${i}`} className="review-detail-kpi-item shared">
                       <span>{k}</span>
-                      {type === 'merge' && (
-                        <span className="review-detail-shared-badge">SHARED</span>
-                      )}
+                      <span className="review-detail-shared-badge">SHARED</span>
+                    </div>
+                  ))}
+                  {sourceOnlyKpis.map((k, i) => (
+                    <div key={`source-${i}`} className="review-detail-kpi-item">
+                      <span>{k}</span>
                     </div>
                   ))}
                 </div>
@@ -226,21 +290,21 @@ export default function RationalizationDetailView() {
                     </div>
                   </div>
 
-                  {type !== 'decommission' && target.common_kpis && target.common_kpis.length > 0 && (
+                  {(sharedKpis.length > 0 || targetOnlyKpis.length > 0) && (
                     <div className="review-detail-section">
                       <h3 className="review-detail-section-title">Its KPIs</h3>
                       <div className="review-detail-kpi-list">
-                        {target.common_kpis.map((k, i) => {
-                          const isShared = commonKpis.has(k);
-                          return (
-                            <div key={i} className={`review-detail-kpi-item ${isShared ? 'shared' : ''}`}>
-                              <span>{k}</span>
-                              {isShared && (
-                                <span className="review-detail-shared-badge">SHARED</span>
-                              )}
-                            </div>
-                          );
-                        })}
+                        {sharedKpis.map((k, i) => (
+                          <div key={`target-shared-${i}`} className="review-detail-kpi-item shared">
+                            <span>{k}</span>
+                            <span className="review-detail-shared-badge">SHARED</span>
+                          </div>
+                        ))}
+                        {targetOnlyKpis.map((k, i) => (
+                          <div key={`target-only-${i}`} className="review-detail-kpi-item">
+                            <span>{k}</span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -328,19 +392,7 @@ export default function RationalizationDetailView() {
           </div>
         </div>
 
-        {/* Action Footer */}
-        <div className="review-detail-footer">
-          <div className="review-detail-footer-info" style={{ color: config.color }}>
-            <TrendingUp size={14} />
-            {type === 'merge' && 'Merging reduces redundant report maintenance'}
-            {type === 'keep' && 'This report is certified and actively maintained'}
-          </div>
-          <div className="review-detail-footer-actions">
-            <button className="btn-cancel" onClick={() => navigate('/rationalization')}>
-              Back
-            </button>
-          </div>
-        </div>
+        {/* Action Footer removed */}
       </div>
     </div>
   );
