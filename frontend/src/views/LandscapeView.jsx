@@ -198,9 +198,9 @@ export default function LandscapeView() {
       />
 
       {/* Render the core D3 Graph view */}
-      <div style={{ height: '650px', width: '100%' }}>
+      <div className="card" style={{ height: '650px', width: '100%', padding: '24px', display: 'flex', flexDirection: 'column' }}>
         {dashboardsStr ? (
-          <KPIDashboardGraph dashboards={dashboardsStr} height="100%" />
+          <KPIDashboardGraph dashboards={dashboardsStr} height="100%" title="Workbook Relationship Map" />
         ) : (
           <div className="card" style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
