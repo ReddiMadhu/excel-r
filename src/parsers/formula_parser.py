@@ -10,14 +10,16 @@ parsing logic for SUMIFS, COUNTIFS, SUM, and arithmetic formulas.
 import os
 import re
 import time
+import tempfile
 import traceback
 import openpyxl
-from openpyxl.utils import get_column_letter, column_index_from_string
-from typing import Any, Dict, List, Optional, Set
+from openpyxl.utils import get_column_letter, column_index_from_string, range_boundaries
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 from src.utils.table_row_limit import (
     TABLE_DATA_ROW_LIMIT,
     collect_compile_range_refs,
+    compile_range_for_table,
     count_formulas_in_scoped_tables,
 )
 from src.utils.timing_log import log_step
@@ -25,6 +27,118 @@ from src.utils.timing_log import log_step
 # ─────────────────────────────────────────────────────────────────
 # formulas library integration
 # ─────────────────────────────────────────────────────────────────
+
+def shrink_formula_ranges(formula_str: str, limit: Optional[int] = None) -> str:
+    """
+    Rewrite full column references (e.g. A:A) and large ranges to capped A1 ranges
+    to prevent formulas library from expanding them to 1M+ rows.
+
+    Uses TABLE_DATA_ROW_LIMIT (default 10) unless `limit` is provided.
+    """
+    if not formula_str or not str(formula_str).startswith('='):
+        return formula_str
+
+    cap = TABLE_DATA_ROW_LIMIT if limit is None else limit
+
+    # 1. Replace full column references like Sheet!A:B or Sheet!$A:$B
+    def repl_col_range(match):
+        sheet = match.group(1) or ""
+        col1 = match.group(2)
+        col2 = match.group(3)
+        sheet_prefix = f"'{sheet}'!" if sheet else ""
+        return f"{sheet_prefix}{col1}1:{col2}{cap}"
+
+    pattern_col = r"(?:'?([^'!]+)'?!)?\$?([A-Z]+):\$?([A-Z]+)"
+    shrunk = re.sub(pattern_col, repl_col_range, formula_str)
+
+    # 2. Replace large cell ranges like Sheet!A1:B5000
+    def repl_cell_range(match):
+        sheet = match.group(1) or ""
+        col1 = match.group(2)
+        row1 = match.group(3)
+        col2 = match.group(4)
+        row2 = match.group(5)
+        sheet_prefix = f"'{sheet}'!" if sheet else ""
+        try:
+            start_row = int(row1)
+            end_row = int(row2)
+            if end_row - start_row + 1 > cap:
+                return f"{sheet_prefix}{col1}{row1}:{col2}{start_row + cap - 1}"
+        except ValueError:
+            pass
+        return match.group(0)
+
+    pattern_range = r"(?:'?([^'!]+)'?!)?\$?([A-Z]+)\$?([0-9]+):\$?([A-Z]+)\$?([0-9]+)"
+    shrunk = re.sub(pattern_range, repl_cell_range, shrunk)
+
+    return shrunk
+
+
+def _safe_remove_file(path: str) -> None:
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except Exception as ex:
+            print(f"Warning: Could not remove temporary file {path}: {ex}")
+
+
+def _iter_formula_cells_in_scoped_tables(
+    wb: openpyxl.Workbook,
+    tables: List[Dict[str, Any]],
+    summary_sheets: Set[str],
+) -> Iterator[Any]:
+    """Yield formula cells inside limited table compile ranges on summary sheets."""
+    for table in tables:
+        sheet = table.get("sheet_name", "")
+        if sheet not in summary_sheets or sheet not in wb.sheetnames:
+            continue
+        table_range = compile_range_for_table(table)
+        if not table_range:
+            continue
+        try:
+            min_col, min_row, max_col, max_row = range_boundaries(table_range)
+        except ValueError:
+            continue
+        ws = wb[sheet]
+        for row in ws.iter_rows(
+            min_row=min_row,
+            max_row=max_row,
+            min_col=min_col,
+            max_col=max_col,
+        ):
+            for cell in row:
+                if cell.value and str(cell.value).startswith("="):
+                    yield cell
+
+
+def _create_shrunk_workbook_copy(
+    file_path: str,
+    summary_sheets: Set[str],
+    tables: List[Dict[str, Any]],
+) -> str:
+    """
+    Return a temp workbook path with shrunk formula ranges, or the original path on failure.
+    """
+    temp_dir = os.path.dirname(file_path)
+    fd, temp_path = tempfile.mkstemp(suffix=".xlsx", dir=temp_dir)
+    os.close(fd)
+    wb = None
+    try:
+        wb = openpyxl.load_workbook(file_path, data_only=False)
+        for cell in _iter_formula_cells_in_scoped_tables(wb, tables, summary_sheets):
+            shrunk_val = shrink_formula_ranges(str(cell.value))
+            if shrunk_val != cell.value:
+                cell.value = shrunk_val
+        wb.save(temp_path)
+        return temp_path
+    except Exception as e:
+        print(f"Warning: Failed to create/shrink temporary workbook: {e}")
+        _safe_remove_file(temp_path)
+        return file_path
+    finally:
+        if wb is not None:
+            wb.close()
+
 
 _node_lookup = None
 
@@ -157,65 +271,72 @@ def compile_workbook_scoped(
         )
         return None
 
-    range_refs = collect_compile_range_refs(file_path, tables, summary_sheets)
-    if not range_refs:
-        log_step(
-            "formulas_compile",
-            "scoped_summary_sheets",
-            0.0,
-            sheets=",".join(sorted(summary_sheets)),
-            scoped_formulas=scoped_count,
-            table_ranges=False,
-            data_row_limit=TABLE_DATA_ROW_LIMIT,
-            compile_skipped="no_table_ranges",
-        )
-        print("  [formulas] Skipped compile — no table ranges for summary sheets")
-        return None
+    compile_file_path = _create_shrunk_workbook_copy(file_path, summary_sheets, tables)
+    using_temp = compile_file_path != file_path
 
-    t0 = time.perf_counter()
     try:
-        import formulas
+        range_refs = collect_compile_range_refs(compile_file_path, tables, summary_sheets)
+        if not range_refs:
+            log_step(
+                "formulas_compile",
+                "scoped_summary_sheets",
+                0.0,
+                sheets=",".join(sorted(summary_sheets)),
+                scoped_formulas=scoped_count,
+                table_ranges=False,
+                data_row_limit=TABLE_DATA_ROW_LIMIT,
+                compile_skipped="no_table_ranges",
+            )
+            print("  [formulas] Skipped compile — no table ranges for summary sheets")
+            return None
 
-        model = formulas.ExcelModel()
-        model.from_ranges(*range_refs)
-        model.finish(complete=False, assemble=True)
-        elapsed = time.perf_counter() - t0
-        sample_ref = range_refs[0]
-        if len(sample_ref) > 80:
-            sample_ref = sample_ref[:77] + "..."
-        log_step(
-            "formulas_compile",
-            "scoped_summary_sheets",
-            elapsed,
-            sheets=",".join(sorted(summary_sheets)),
-            scoped_formulas=scoped_count,
-            table_ranges=True,
-            data_row_limit=TABLE_DATA_ROW_LIMIT,
-            range_ref_count=len(range_refs),
-            range_refs_sample=sample_ref,
-        )
-        print(
-            f"  [formulas] Scoped compile: {len(summary_sheets)} summary sheet(s), "
-            f"{scoped_count} formula(s), {len(range_refs)} range(s), "
-            f"{TABLE_DATA_ROW_LIMIT} data rows max"
-        )
-        return model
-    except Exception as e:
-        elapsed = time.perf_counter() - t0
-        print(f"Warning: table-range compile failed: {e}")
-        traceback.print_exc()
-        log_step(
-            "formulas_compile",
-            "scoped_summary_sheets",
-            elapsed,
-            sheets=",".join(sorted(summary_sheets)),
-            scoped_formulas=scoped_count,
-            table_ranges=False,
-            data_row_limit=TABLE_DATA_ROW_LIMIT,
-            compile_skipped="from_ranges_failed",
-            range_ref_count=len(range_refs),
-        )
-        return None
+        t0 = time.perf_counter()
+        try:
+            import formulas
+
+            model = formulas.ExcelModel()
+            model.from_ranges(*range_refs)
+            model.finish(complete=False, assemble=True)
+            elapsed = time.perf_counter() - t0
+            sample_ref = range_refs[0]
+            if len(sample_ref) > 80:
+                sample_ref = sample_ref[:77] + "..."
+            log_step(
+                "formulas_compile",
+                "scoped_summary_sheets",
+                elapsed,
+                sheets=",".join(sorted(summary_sheets)),
+                scoped_formulas=scoped_count,
+                table_ranges=True,
+                data_row_limit=TABLE_DATA_ROW_LIMIT,
+                range_ref_count=len(range_refs),
+                range_refs_sample=sample_ref,
+            )
+            print(
+                f"  [formulas] Scoped compile: {len(summary_sheets)} summary sheet(s), "
+                f"{scoped_count} formula(s), {len(range_refs)} range(s), "
+                f"{TABLE_DATA_ROW_LIMIT} data rows max"
+            )
+            return model
+        except Exception as e:
+            elapsed = time.perf_counter() - t0
+            print(f"Warning: table-range compile failed: {e}")
+            traceback.print_exc()
+            log_step(
+                "formulas_compile",
+                "scoped_summary_sheets",
+                elapsed,
+                sheets=",".join(sorted(summary_sheets)),
+                scoped_formulas=scoped_count,
+                table_ranges=False,
+                data_row_limit=TABLE_DATA_ROW_LIMIT,
+                compile_skipped="from_ranges_failed",
+                range_ref_count=len(range_refs),
+            )
+            return None
+    finally:
+        if using_temp:
+            _safe_remove_file(compile_file_path)
 
 
 def compile_workbook(file_path):
