@@ -252,7 +252,10 @@ class PairwiseOverlap(BaseModel):
     fingerprint_ratio: float = 0.0
     combined_score: float = 0.0
     overlap_class: str = "distinct"
+    overlap_relationship: str = "distinct"
     common_kpis: List[str] = Field(default_factory=list)
+    unique_kpis_a: List[str] = Field(default_factory=list)
+    unique_kpis_b: List[str] = Field(default_factory=list)
 
 
 class PairwiseMatrixResponse(BaseModel):

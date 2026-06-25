@@ -9,24 +9,29 @@ Phase 3: Per-action-group recommendation justification + AI fields
 
 KPI_CANONICALIZATION_PROMPT = """You are an expert actuarial and financial business analyst.
 
-Given these Excel column/KPI names grouped by lexical similarity,
-along with their computation fingerprints and raw data sources,
-produce canonical KPI clusters. Merge groups that represent
-the same business metric even if named differently.
+The groups below were formed because the Excel columns share identical computation
+content — not because their names look similar. Each group matched on one or more of:
+  - fingerprint: identical formula structure AND identical raw data sources
+  - source_type: same upstream raw data tables AND same aggregation type (SUMIFS, COUNTIFS, etc.)
+  - pattern: identical formula pattern string
+  - definition: identical column definition text
 
-Pre-clusters:
+Your job is to confirm or split these content-based groups into final canonical KPI clusters.
+
+Pre-clusters (each group already shares computation content):
 {pre_clusters}
 
 Rules:
-1. Each canonical_name should be a clean, descriptive business name (no column letters or sheet prefixes).
-2. If two groups clearly measure the same business metric (same raw sources, similar aggregation), merge them.
-3. If a group contains names that are genuinely different metrics, keep them as separate clusters.
-4. Maintain the original names exactly as provided in the members list.
+1. canonical_name MUST be one of the exact member names from the group — choose the most complete and meaningful name from the list. Do NOT invent or rewrite names.
+2. If two groups share fingerprints or raw sources AND represent the same business concept, merge them into one cluster and pick the best member name as canonical.
+3. If members within a group share identical computation but represent genuinely different business concepts (e.g. two metrics that happen to use the same source table for unrelated purposes), split them into separate clusters.
+4. Never merge groups that have different fingerprints AND different raw sources — identical computation is required for merging.
+5. Maintain every original member name exactly as provided — do not modify, abbreviate, or rename any member.
 
 Return a JSON array:
 [
   {{
-    "canonical_name": "Human readable canonical metric name",
+    "canonical_name": "one of the exact member names from this cluster",
     "members": ["original_name_1", "original_name_2"]
   }}
 ]

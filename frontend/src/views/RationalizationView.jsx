@@ -44,6 +44,25 @@ export default function RationalizationView() {
     }
   };
 
+  // Pairwise KPI breakdown lookup: "id_a-id_b" → { unique_kpis_a, unique_kpis_b, name_a, name_b }
+  const pairwiseKpiMap = useMemo(() => {
+    if (!pairwise?.pairs) return {};
+    const map = {};
+    pairwise.pairs.forEach(p => {
+      const key = [p.workbook_id_a, p.workbook_id_b].sort((a, b) => a - b).join('-');
+      map[key] = {
+        unique_kpis_a: p.unique_kpis_a || [],
+        unique_kpis_b: p.unique_kpis_b || [],
+        name_a: p.workbook_name_a,
+        name_b: p.workbook_name_b,
+        id_a: p.workbook_id_a,
+        id_b: p.workbook_id_b,
+        overlap_relationship: p.overlap_relationship || 'distinct',
+      };
+    });
+    return map;
+  }, [pairwise]);
+
   // Compute sharing map for KPIs
   const kpiSharingMap = useMemo(() => {
     if (!recs) return {};
@@ -75,9 +94,18 @@ export default function RationalizationView() {
   // ── Derived data ──────────────────────────────────────────
   const counts = useMemo(() => {
     if (!recs) return { keep: 0, merge: 0, decommission: 0, review: 0 };
+    // Count merge groups (pairs), not individual workbooks
+    const mergeAll = recs.filter(r => r.action === 'merge');
+    const seenPairs = new Set();
+    let mergeGroups = 0;
+    for (const r of mergeAll) {
+      if (!r.merge_with_id) { mergeGroups++; continue; }
+      const key = [r.workbook_id, r.merge_with_id].sort((a, b) => a - b).join('-');
+      if (!seenPairs.has(key)) { seenPairs.add(key); mergeGroups++; }
+    }
     return {
       keep: recs.filter(r => r.action === 'keep').length,
-      merge: recs.filter(r => r.action === 'merge').length,
+      merge: mergeGroups,
       decommission: recs.filter(r => r.action === 'decommission' || r.action === 'delete').length,
       review: recs.filter(r => r.action === 'review').length,
     };
@@ -113,14 +141,39 @@ export default function RationalizationView() {
       const mergeMatch = (rec.merge_with_name || '').toLowerCase().includes(q);
       if (!nameMatch && !mergeMatch) return false;
     }
-    if (selectedWorkbook !== 'all' && rec.workbook_name !== selectedWorkbook) return false;
+    if (selectedWorkbook !== 'all') {
+      // For merge recs, include if either side matches
+      const nameMatch = rec.workbook_name === selectedWorkbook;
+      const partnerMatch = rec.merge_with_name === selectedWorkbook;
+      if (!nameMatch && !partnerMatch) return false;
+    }
     return true;
   };
 
+  // Raw merge recs (undeduped) — used only for counting individuals
   const mergeRecs = useMemo(
     () => (recs || []).filter(r => r.action === 'merge').filter(filterRec),
     [recs, searchTerm, selectedWorkbook]
   );
+
+  // Deduplicated merge pairs — one card per unique A↔B pair
+  const mergePairs = useMemo(() => {
+    const seen = new Set();
+    const pairs = [];
+    for (const rec of mergeRecs) {
+      if (!rec.merge_with_id) {
+        pairs.push({ primary: rec, partner: null });
+        continue;
+      }
+      const key = [rec.workbook_id, rec.merge_with_id].sort((a, b) => a - b).join('-');
+      if (!seen.has(key)) {
+        seen.add(key);
+        const partner = mergeRecs.find(r => r.workbook_id === rec.merge_with_id) || null;
+        pairs.push({ primary: rec, partner });
+      }
+    }
+    return pairs;
+  }, [mergeRecs]);
 
   const decommissionFiltered = useMemo(() => {
     const pairs = [];
@@ -160,7 +213,7 @@ export default function RationalizationView() {
 
   if (loading) return <Loader />;
 
-  const totalFiltered = mergeRecs.length + decommissionFiltered.length + keepRecs.length + reviewRecs.length;
+  const totalFiltered = mergePairs.length + decommissionFiltered.length + keepRecs.length + reviewRecs.length;
 
   return (
     <div className="page-enter">
@@ -229,7 +282,7 @@ export default function RationalizationView() {
               />
               <PillButton
                 label="Merge"
-                count={mergeRecs.length}
+                count={mergePairs.length}
                 color="var(--accent-amber)"
                 active={activeTab === 'merge'}
                 activeClass="active-merge"
@@ -273,12 +326,20 @@ export default function RationalizationView() {
                 <ColumnHeader
                   label="MERGE"
                   color="var(--accent-amber)"
-                  count={mergeRecs.length}
+                  count={mergePairs.length}
                   badge="merge"
-                  badgeText="Redundant"
+                  badgeText="Groups"
                 />
-                {mergeRecs.length > 0 ? mergeRecs.map(rec => (
-                  <RecCard key={rec.id} rec={rec} type="merge" onReview={() => goToReview(rec, 'merge')} kpiSharingMap={kpiSharingMap} />
+                {mergePairs.length > 0 ? mergePairs.map(({ primary, partner }) => (
+                  <MergeGroupCard
+                    key={primary.id}
+                    primary={primary}
+                    partner={partner}
+                    onReviewPrimary={() => goToReview(primary, 'merge')}
+                    onReviewPartner={partner ? () => goToReview(partner, 'merge') : null}
+                    kpiSharingMap={kpiSharingMap}
+                    pairwiseKpiMap={pairwiseKpiMap}
+                  />
                 )) : <div className="ration-empty">No merge recommendations</div>}
               </div>
 
@@ -314,9 +375,17 @@ export default function RationalizationView() {
             <div className="ration-grid single-col">
               {activeTab === 'merge' && (
                 <div className="ration-column">
-                  <ColumnHeader label="MERGE" color="var(--accent-amber)" count={mergeRecs.length} badge="merge" badgeText="Redundant" />
-                  {mergeRecs.length > 0 ? mergeRecs.map(rec => (
-                    <RecCard key={rec.id} rec={rec} type="merge" onReview={() => goToReview(rec, 'merge')} kpiSharingMap={kpiSharingMap} />
+                  <ColumnHeader label="MERGE" color="var(--accent-amber)" count={mergePairs.length} badge="merge" badgeText="Groups" />
+                  {mergePairs.length > 0 ? mergePairs.map(({ primary, partner }) => (
+                    <MergeGroupCard
+                      key={primary.id}
+                      primary={primary}
+                      partner={partner}
+                      onReviewPrimary={() => goToReview(primary, 'merge')}
+                      onReviewPartner={partner ? () => goToReview(partner, 'merge') : null}
+                      kpiSharingMap={kpiSharingMap}
+                      pairwiseKpiMap={pairwiseKpiMap}
+                    />
                   )) : <div className="ration-empty">No merge recommendations</div>}
                 </div>
               )}
@@ -511,6 +580,186 @@ function scoreColor(pct, inverse) {
   return pct >= 70 ? 'var(--accent-rose)' : pct >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)';
 }
 
+function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kpiSharingMap, pairwiseKpiMap }) {
+  const [kpiExpanded, setKpiExpanded] = useState(false);
+  const reasons = cleanReasons(primary.reasons);
+  const kpiPct = ((primary.kpi_overlap_score || 0) * 100).toFixed(0);
+  const dsPct = ((primary.datasource_overlap_score || 0) * 100).toFixed(0);
+  const commonKpis = primary.common_kpis || [];
+
+  const partnerName = partner ? partner.workbook_name : (primary.merge_with_name || '');
+  const partnerId = partner ? partner.workbook_id : primary.merge_with_id;
+
+  // Lookup unique KPIs from pairwise data
+  const pairKey = partnerId
+    ? [primary.workbook_id, partnerId].sort((a, b) => a - b).join('-')
+    : null;
+  const pairData = pairKey ? (pairwiseKpiMap[pairKey] || null) : null;
+
+  // Orient unique KPIs so _a = primary workbook, _b = partner
+  let uniqueToPrimary = [];
+  let uniqueToPartner = [];
+  if (pairData) {
+    if (pairData.id_a === primary.workbook_id) {
+      uniqueToPrimary = pairData.unique_kpis_a;
+      uniqueToPartner = pairData.unique_kpis_b;
+    } else {
+      uniqueToPrimary = pairData.unique_kpis_b;
+      uniqueToPartner = pairData.unique_kpis_a;
+    }
+  }
+
+  const totalKpis = commonKpis.length + uniqueToPrimary.length + uniqueToPartner.length;
+
+  return (
+    <div className="rec-card merge">
+      {/* Header — both workbooks with merge icon */}
+      <div className="rec-card-top" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', flexWrap: 'wrap' }}>
+          <div className="rec-card-name" style={{ flex: 1 }}>{primary.workbook_name}</div>
+          <span style={{
+            display: 'flex', alignItems: 'center',
+            color: 'var(--accent-amber)', fontWeight: 700, flexShrink: 0,
+          }}>
+            <GitMerge size={15} />
+          </span>
+          <div className="rec-card-name" style={{ flex: 1 }}>{partnerName}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <span className="badge badge-amber" style={{ fontSize: '0.68rem' }}>Merge Group</span>
+          {pairData?.overlap_relationship === 'both_have_extras' && (
+            <span className="badge" style={{ fontSize: '0.68rem', background: 'rgba(59,130,246,0.12)', color: 'var(--accent-blue)' }}>
+              Both add unique KPIs
+            </span>
+          )}
+          {primary.llm_override && <span className="badge badge-purple" style={{ fontSize: '0.68rem' }}>AI Override</span>}
+        </div>
+      </div>
+
+      {/* Overlap Scores */}
+      <div className="rec-card-scores">
+        <div className="rec-score-item">
+          <span className="rec-score-label">KPI Overlap:</span>
+          <span className="rec-score-value" style={{ color: scoreColor(+kpiPct, false) }}>{kpiPct}%</span>
+        </div>
+        <div className="rec-score-item">
+          <span className="rec-score-label">DS Overlap:</span>
+          <span className="rec-score-value" style={{ color: scoreColor(+dsPct, false) }}>{dsPct}%</span>
+        </div>
+      </div>
+
+      {/* Rationale */}
+      {reasons.length > 0 && (
+        <div className="rec-card-rationale">
+          <div className="rec-card-rationale-title">Governance Rationale</div>
+          <ul>
+            {reasons.map((reason, i) => (
+              <li key={i}>
+                <span className="rationale-icon" style={{ color: 'var(--accent-amber)' }}>!</span>
+                <span>{reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* AI Justification */}
+      {primary.llm_justification && (
+        <div className="rec-card-ai">
+          <Sparkles size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
+          {primary.llm_justification}
+        </div>
+      )}
+
+      {/* KPI Breakdown — shared + unique per workbook */}
+      {totalKpis > 0 && (
+        <div className="rec-card-kpis">
+          <button
+            className="rec-card-kpis-label"
+            onClick={() => setKpiExpanded(e => !e)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+              display: 'flex', alignItems: 'center', gap: 6,
+              color: 'inherit', font: 'inherit', fontWeight: 600,
+            }}
+          >
+            <ChevronRight size={13} style={{ transform: kpiExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
+            KPI Breakdown
+            <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+              {commonKpis.length} shared · {uniqueToPrimary.length + uniqueToPartner.length} unique
+            </span>
+          </button>
+
+          {kpiExpanded && (
+            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* Shared KPIs */}
+              {commonKpis.length > 0 && (
+                <div>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Shared ({commonKpis.length} — {kpiPct}% overlap)
+                  </div>
+                  <div className="rec-card-kpis-tags">
+                    {commonKpis.map((k, i) => (
+                      <span key={i} className="rec-kpi-tag" style={{ background: 'rgba(245,158,11,0.12)', color: 'var(--accent-amber)' }} title="Shared between both workbooks">
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Unique to primary */}
+              {uniqueToPrimary.length > 0 && (
+                <div>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Only in {primary.workbook_name} ({uniqueToPrimary.length})
+                  </div>
+                  <div className="rec-card-kpis-tags">
+                    {uniqueToPrimary.map((k, i) => (
+                      <span key={i} className="rec-kpi-tag" style={{ background: 'rgba(59,130,246,0.1)', color: 'var(--accent-blue)' }} title={`Unique to ${primary.workbook_name}`}>
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Unique to partner */}
+              {uniqueToPartner.length > 0 && (
+                <div>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Only in {partnerName} ({uniqueToPartner.length})
+                  </div>
+                  <div className="rec-card-kpis-tags">
+                    {uniqueToPartner.map((k, i) => (
+                      <span key={i} className="rec-kpi-tag" style={{ background: 'rgba(139,92,246,0.1)', color: 'var(--accent-purple)' }} title={`Unique to ${partnerName}`}>
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Footer — review buttons for each workbook */}
+      <div className="rec-card-footer" style={{ gap: 6, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1 }} />
+        <button className="btn-review merge" onClick={onReviewPrimary} style={{ fontSize: '0.72rem' }}>
+          {primary.workbook_name} <ArrowRight size={11} />
+        </button>
+        {onReviewPartner && (
+          <button className="btn-review merge" onClick={onReviewPartner} style={{ fontSize: '0.72rem' }}>
+            {partner?.workbook_name} <ArrowRight size={11} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RecCard({ rec, type, onReview, kpiSharingMap }) {
   const reasons = cleanReasons(rec.reasons);
   const kpiPct = ((rec.kpi_overlap_score || 0) * 100).toFixed(0);
@@ -531,6 +780,11 @@ function RecCard({ rec, type, onReview, kpiSharingMap }) {
       <div className="rec-card-top">
         <div>
           <div className="rec-card-name">{rec.workbook_name}</div>
+          {type === 'decommission' && reasons.some(r => /already present|identical kpi/i.test(r)) && (
+            <span className="badge" style={{ marginTop: 4, display: 'inline-block', fontSize: '0.68rem', background: 'rgba(244,63,94,0.12)', color: 'var(--accent-rose)' }}>
+              Subset of retain target
+            </span>
+          )}
           {rec.llm_override && <span className="badge badge-purple" style={{ marginTop: 4, display: 'inline-block' }}>AI Override</span>}
         </div>
         <span className={`rec-card-uniqueness ${type}`}>

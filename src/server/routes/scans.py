@@ -80,6 +80,7 @@ async def create_scan(files: List[UploadFile] = File(...)):
 
     for f in xlsx_files:
         dest = os.path.join(scan_dir, f.filename)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
         t0 = time.perf_counter()
         contents = await f.read()
         read_sec = time.perf_counter() - t0

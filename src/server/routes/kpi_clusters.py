@@ -41,7 +41,8 @@ async def list_kpi_clusters():
             count_row = db.query_one(
                 f"""SELECT COUNT(DISTINCT workbook_id) as cnt
                     FROM calculated_fields
-                    WHERE name IN ({placeholders})""",
+                    WHERE name IN ({placeholders})
+                      AND column_type IN ('formula_based', 'pivot_value', 'total')""",
                 tuple(original_names)
             )
             workbook_count = count_row["cnt"] if count_row else 0

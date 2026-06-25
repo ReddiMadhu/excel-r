@@ -29,9 +29,9 @@ def _get_canonical_kpis_for_workbook(
     rows = db.query("""
         SELECT DISTINCT kc.canonical_name
         FROM calculated_fields cf
-        JOIN kpi_cluster_cache kc ON cf.name = kc.original_name
+        JOIN kpi_cluster_cache kc ON cf.name = kc.original_name COLLATE NOCASE
         WHERE cf.workbook_id = ?
-          AND cf.column_type IN ('formula_based', 'pivot_value')
+          AND cf.column_type IN ('formula_based', 'pivot_value', 'total')
     """, (workbook_id,))
     return {r["canonical_name"] for r in rows}
 
@@ -39,10 +39,24 @@ def _get_canonical_kpis_for_workbook(
 def _get_raw_sources_for_workbook(
     db: Database, workbook_id: int
 ) -> Set[str]:
-    """Get normalized raw source set for a workbook."""
+    """
+    Get normalized raw source set for a workbook.
+
+    Source priority:
+      1. ultimate_raw_sources from calculated_fields — formula-lineage derived,
+         tracks exactly which raw columns each formula references.  This is the
+         gold standard for both pivot_value and formula_based columns.
+      2. primary_inputs from workbooks — manually tagged or inferred inputs.
+      3. Datasource column headers (fallback ONLY) — all column headers from raw
+         data sheets.  Only used when lineage extraction produced no sources at
+         all.  Including these unconditionally inflates Jaccard to ~100% for any
+         two workbooks sharing the same raw data sheet (e.g. a pivot table
+         workbook and a regular formula workbook both sitting on SQL_data), even
+         when their formulas reference entirely different columns.
+    """
     sources: Set[str] = set()
 
-    # From calculated_fields ultimate_raw_sources
+    # 1. Formula-lineage sources (specific columns actually used by formulas)
     rows = db.query("""
         SELECT ultimate_raw_sources
         FROM calculated_fields
@@ -53,19 +67,20 @@ def _get_raw_sources_for_workbook(
     for r in rows:
         sources |= normalize_source_set(parse_json_list(r.get("ultimate_raw_sources")))
 
-    # From datasources column headers
-    ds_rows = db.query(
-        "SELECT name, column_headers FROM datasources WHERE workbook_id = ?",
-        (workbook_id,),
-    )
-    for ds in ds_rows:
-        headers = parse_json_list(ds.get("column_headers"))
-        sources |= normalize_datasource_headers(ds.get("name", ""), headers)
-
-    # From workbook primary_inputs
+    # 2. Workbook-level primary inputs
     wb = db.query_one("SELECT primary_inputs FROM workbooks WHERE id = ?", (workbook_id,))
     if wb:
         sources |= normalize_source_set(parse_json_list(wb.get("primary_inputs")))
+
+    # 3. Fallback: raw datasource column headers, only when lineage is absent
+    if not sources:
+        ds_rows = db.query(
+            "SELECT name, column_headers FROM datasources WHERE workbook_id = ?",
+            (workbook_id,),
+        )
+        for ds in ds_rows:
+            headers = parse_json_list(ds.get("column_headers"))
+            sources |= normalize_datasource_headers(ds.get("name", ""), headers)
 
     return sources
 
@@ -172,7 +187,9 @@ def compute_pairwise_overlaps(
             kpi_a = data_a["canonical_kpis"]
             kpi_b = data_b["canonical_kpis"]
             kpi_overlap = jaccard_similarity(kpi_a, kpi_b)
-            common_kpis = list(kpi_a & kpi_b)
+            common_kpis = sorted(kpi_a & kpi_b)
+            unique_kpis_a = sorted(kpi_a - kpi_b)
+            unique_kpis_b = sorted(kpi_b - kpi_a)
 
             src_a = data_a["raw_sources"]
             src_b = data_b["raw_sources"]
@@ -198,10 +215,38 @@ def compute_pairwise_overlaps(
                 + gamma * fp_ratio + delta * structural_overlap
             )
 
+            kpi_containment_a = (
+                len(kpi_a & kpi_b) / len(kpi_a) if kpi_a else 0.0
+            )
+            kpi_containment_b = (
+                len(kpi_a & kpi_b) / len(kpi_b) if kpi_b else 0.0
+            )
+
+            overlap_relationship = "distinct"
+            if kpi_a and kpi_b and kpi_a == kpi_b:
+                overlap_relationship = "identical"
+            elif kpi_containment_a >= 1.0 and unique_kpis_b:
+                overlap_relationship = "a_subset_of_b"
+            elif kpi_containment_b >= 1.0 and unique_kpis_a:
+                overlap_relationship = "b_subset_of_a"
+            elif common_kpis and unique_kpis_a and unique_kpis_b:
+                overlap_relationship = "both_have_extras"
+
             overlap_class = "distinct"
-            if kpi_overlap >= 0.85 and ds_overlap >= 0.85:
+            # Relationship-first classification (mirrors Recommender):
+            #   duplicate       → subset, identical, or near-duplicate (Jaccard gates)
+            #   merge_candidate → shared KPIs with extras on BOTH sides
+            if overlap_relationship in ("identical", "a_subset_of_b", "b_subset_of_a"):
                 overlap_class = "duplicate"
-            elif kpi_overlap >= 0.50 and ds_overlap >= 0.40:
+            elif (
+                kpi_overlap >= 0.85 and ds_overlap >= 0.85 and fp_ratio >= 0.70
+            ):
+                overlap_class = "duplicate"
+            elif (
+                overlap_relationship == "both_have_extras"
+                and kpi_overlap >= 0.50
+                and ds_overlap >= 0.60
+            ):
                 overlap_class = "merge_candidate"
 
             results[(id_a, id_b)] = {
@@ -214,6 +259,11 @@ def compute_pairwise_overlaps(
                 "combined_score": combined_score,
                 "overlap_class": overlap_class,
                 "common_kpis": common_kpis,
+                "unique_kpis_a": unique_kpis_a,
+                "unique_kpis_b": unique_kpis_b,
+                "kpi_containment_a": round(kpi_containment_a, 4),
+                "kpi_containment_b": round(kpi_containment_b, 4),
+                "overlap_relationship": overlap_relationship,
                 "common_datasources": common_ds,
                 "matching_fingerprints": matching_fps,
                 "name_a": data_a["name"],

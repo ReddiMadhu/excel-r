@@ -92,7 +92,7 @@ def detect_workbook_risks(
             SELECT c.column_name, c.table_name, c.resolved_by
             FROM columns c
             WHERE c.workbook_id = ?
-              AND c.column_type IN ('formula_based', 'pivot_value')
+              AND c.column_type IN ('formula_based', 'pivot_value', 'total')
               AND (c.resolved_by = 'degraded' OR c.formula_lineage IS NULL
                    OR c.formula_lineage = 'null' OR c.formula_lineage = '{}')
         """, (wb_id,))

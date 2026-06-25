@@ -1,141 +1,249 @@
 """
 KPI Canonicalizer — Phase 1 of the rationalization pipeline.
 
-Step 1: Lexical pre-clustering (Token Sort Ratio ≥ 0.85)
-Step 2: LLM refinement of ambiguous clusters
+Step 1: Content-based pre-clustering — KPIs are grouped only when their
+        computation content matches on one or more of:
+          (a) identical fingerprint  (same formula structure + same sources)
+          (b) same normalized ultimate_raw_sources set + same computation_type
+          (c) same formula_pattern string
+          (d) same normalized definition text
+
+Step 2: LLM semantic review — confirm or split ambiguous clusters.
+
+Name similarity is NOT used. Two KPIs must share actual computation
+content to be placed in the same cluster.
 """
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from src.server.models.database import Database
+from src.rationalization.source_normalizer import normalize_source_token
 
 logger = logging.getLogger(__name__)
 
-# Stop words to strip from KPI names for normalization
-_STOP_WORDS = {"of", "the", "and", "for", "by", "in", "to", "a", "an", "is", "from", "with"}
 
-# Common prefixes/suffixes to strip
-_STRIP_PREFIXES = ["sum of", "total of", "count of", "average of", "avg of", "grand total"]
-_STRIP_SUFFIXES = ["total", "grand total", "check"]
+# ---------------------------------------------------------------------------
+# Content-based matching helpers
+# ---------------------------------------------------------------------------
 
-
-def _normalize_kpi_name(name: str) -> str:
-    """Normalize a KPI name for comparison."""
-    n = name.strip().lower()
-
-    # Strip common prefixes
-    for prefix in _STRIP_PREFIXES:
-        if n.startswith(prefix):
-            n = n[len(prefix):].strip()
-
-    # Strip common suffixes
-    for suffix in _STRIP_SUFFIXES:
-        if n.endswith(suffix):
-            n = n[:-len(suffix)].strip()
-
-    # Remove punctuation, replace spaces with underscores
-    n = re.sub(r'[^a-z0-9\s]', '', n)
-    # Remove stop words
-    tokens = [t for t in n.split() if t not in _STOP_WORDS]
-    return "_".join(tokens)
+def _normalize_definition(text: str) -> str:
+    """Normalize a definition/description for comparison."""
+    if not text:
+        return ""
+    t = text.strip().lower()
+    t = re.sub(r"[^a-z0-9\s]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
 
-def _token_sort_ratio(a: str, b: str) -> float:
+def _sources_key(sources: List[str]) -> FrozenSet[str]:
+    """Return a frozenset of normalized source tokens for comparison."""
+    return frozenset(
+        normalize_source_token(s) for s in sources if s
+    )
+
+
+def _enrich_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Compute Token Sort Ratio between two strings.
-    Uses rapidfuzz if available, falls back to simple implementation.
+    Add pre-computed comparison keys to a raw DB row so matching is fast.
+    Modifies the dict in-place and returns it.
     """
-    try:
-        from rapidfuzz import fuzz
-        return fuzz.token_sort_ratio(a, b) / 100.0
-    except ImportError:
-        # Simple fallback: Jaccard on sorted token sets
-        tokens_a = set(sorted(a.lower().split()))
-        tokens_b = set(sorted(b.lower().split()))
-        if not tokens_a and not tokens_b:
-            return 1.0
-        intersection = tokens_a & tokens_b
-        union = tokens_a | tokens_b
-        return len(intersection) / len(union) if union else 0.0
+    # Parse ultimate_raw_sources
+    raw_src = row.get("ultimate_raw_sources", "[]")
+    if isinstance(raw_src, str):
+        try:
+            sources = json.loads(raw_src)
+        except Exception:
+            sources = []
+    elif isinstance(raw_src, list):
+        sources = raw_src
+    else:
+        sources = []
+
+    row["_sources_list"] = sources
+    row["_sources_key"] = _sources_key(sources)
+    row["_def_norm"] = _normalize_definition(row.get("definition") or "")
+    row["_fp"] = (row.get("fingerprint") or "").strip()
+    row["_fp_pattern"] = (row.get("formula_pattern") or "").strip()
+    row["_comp_type"] = (row.get("computation_type") or "").strip()
+    return row
 
 
-def lexical_pre_cluster(kpi_names: List[str], threshold: float = 0.85) -> List[List[str]]:
+def _content_match(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[str]:
     """
-    Group KPI names by Token Sort Ratio ≥ threshold.
+    Return the strongest matching signal name if rows a and b represent
+    the same KPI, or None if they do not match.
 
-    Returns a list of clusters, each cluster is a list of original KPI names.
+    Priority:
+      1. fingerprint  — identical formula structure + identical sources
+      2. source_type  — same normalized source set + same computation type
+      3. pattern      — same formula_pattern string
+      4. definition   — same normalized definition text
     """
-    if not kpi_names:
+    # 1. Exact fingerprint match
+    if a["_fp"] and a["_fp"] == b["_fp"]:
+        return "fingerprint"
+
+    # 2. Same sources + same computation type (both non-empty)
+    if (
+        a["_sources_key"]
+        and a["_sources_key"] == b["_sources_key"]
+        and a["_comp_type"]
+        and a["_comp_type"] == b["_comp_type"]
+    ):
+        return "source_type"
+
+    # 3. Same formula pattern (non-empty)
+    if a["_fp_pattern"] and a["_fp_pattern"] == b["_fp_pattern"]:
+        return "pattern"
+
+    # 4. Same normalized definition (non-empty, at least 10 chars to avoid trivial matches)
+    if a["_def_norm"] and len(a["_def_norm"]) >= 10 and a["_def_norm"] == b["_def_norm"]:
+        return "definition"
+
+    return None
+
+
+def content_based_pre_cluster(
+    rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Group KPI rows into clusters based on content signals.
+
+    Returns a list of cluster dicts:
+      {
+        "members": [name, ...],
+        "match_signals": {signal_name: count, ...},
+        "fingerprints": [fp, ...],
+        "sources": [[...], ...],
+      }
+    """
+    if not rows:
         return []
 
-    # Normalize all names
-    normalized = [(name, _normalize_kpi_name(name)) for name in kpi_names]
+    # Enrich rows with pre-computed keys (in-place)
+    for r in rows:
+        _enrich_row(r)
 
-    # Greedy clustering
-    clusters: List[List[str]] = []
-    assigned: Set[int] = set()
+    # Union-find by row index
+    parent = list(range(len(rows)))
+    signal_for_pair: Dict[Tuple[int, int], str] = {}
 
-    for i, (name_i, norm_i) in enumerate(normalized):
-        if i in assigned:
-            continue
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
 
-        cluster = [name_i]
-        assigned.add(i)
+    def union(x: int, y: int, signal: str) -> None:
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[ry] = rx
+        signal_for_pair[(min(x, y), max(x, y))] = signal
 
-        for j, (name_j, norm_j) in enumerate(normalized):
-            if j in assigned:
-                continue
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            sig = _content_match(rows[i], rows[j])
+            if sig:
+                union(i, j, sig)
 
-            ratio = _token_sort_ratio(norm_i, norm_j)
-            if ratio >= threshold:
-                cluster.append(name_j)
-                assigned.add(j)
+    # Group by root
+    groups: Dict[int, List[int]] = {}
+    for i in range(len(rows)):
+        root = find(i)
+        groups.setdefault(root, []).append(i)
 
-        clusters.append(cluster)
+    clusters = []
+    for indices in groups.values():
+        members = [rows[i]["name"] for i in indices]
+
+        # Collect match signals seen across all pairs in this cluster
+        match_signals: Dict[str, int] = {}
+        for ii in indices:
+            for jj in indices:
+                if ii >= jj:
+                    continue
+                key = (min(ii, jj), max(ii, jj))
+                sig = signal_for_pair.get(key)
+                if sig:
+                    match_signals[sig] = match_signals.get(sig, 0) + 1
+
+        # Collect unique fingerprints and sources for LLM context
+        fps = sorted({rows[i]["_fp"] for i in indices if rows[i]["_fp"]})
+        sources_list = [rows[i]["_sources_list"] for i in indices if rows[i]["_sources_list"]]
+
+        clusters.append({
+            "members": members,
+            "match_signals": match_signals,
+            "fingerprints": fps,
+            "sources": sources_list,
+        })
 
     return clusters
 
 
+# ---------------------------------------------------------------------------
+# LLM context builder
+# ---------------------------------------------------------------------------
+
 def build_pre_cluster_context(
-    clusters: List[List[str]],
+    clusters: List[Dict[str, Any]],
     fingerprint_map: Dict[str, str],
-    source_map: Dict[str, List[str]]
+    source_map: Dict[str, List[str]],
 ) -> str:
     """
     Build the pre-cluster context string for the LLM prompt.
 
-    Args:
-        clusters: List of KPI name clusters from lexical pre-clustering
-        fingerprint_map: {kpi_name: fingerprint_string}
-        source_map: {kpi_name: [ultimate_raw_source_1, ...]}
+    Shows why each cluster was formed (which content signal matched)
+    along with fingerprints and sources.
     """
     lines = []
     for i, cluster in enumerate(clusters, 1):
-        lines.append(f"  Group {i}: {json.dumps(cluster)}")
+        members = cluster.get("members", [])
+        signals = cluster.get("match_signals", {})
+        fps = cluster.get("fingerprints", [])
+        sources_nested = cluster.get("sources", [])
 
-        # Collect fingerprints
-        fps = set()
-        for name in cluster:
+        lines.append(f"  Group {i}: {json.dumps(members)}")
+
+        if signals:
+            signal_summary = ", ".join(
+                f"{sig}({count})" for sig, count in sorted(signals.items())
+            )
+            lines.append(f"    Matched by: {signal_summary}")
+
+        # Fingerprints (from cluster or fallback to fingerprint_map)
+        all_fps = set(fps)
+        for name in members:
             fp = fingerprint_map.get(name, "")
             if fp:
-                fps.add(fp)
-        if fps:
-            lines.append(f"    Fingerprints: {json.dumps(list(fps))}")
+                all_fps.add(fp)
+        if all_fps:
+            lines.append(f"    Fingerprints: {json.dumps(sorted(all_fps))}")
 
-        # Collect raw sources
-        sources = set()
-        for name in cluster:
-            for src in source_map.get(name, []):
-                sources.add(src)
-        if sources:
-            lines.append(f"    Raw sources: {json.dumps(list(sources))}")
+        # Raw sources (from cluster or fallback to source_map)
+        all_sources: Set[str] = set()
+        for src_list in sources_nested:
+            for s in src_list:
+                if s:
+                    all_sources.add(s)
+        for name in members:
+            for s in source_map.get(name, []):
+                if s:
+                    all_sources.add(s)
+        if all_sources:
+            lines.append(f"    Raw sources: {json.dumps(sorted(all_sources))}")
 
         lines.append("")
 
     return "\n".join(lines)
 
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 def run_kpi_canonicalization(
     db: Database,
@@ -145,60 +253,84 @@ def run_kpi_canonicalization(
     """
     Run Phase 1: KPI Canonicalization.
 
-    1. Collect all unique KPI names from calculated_fields
-    2. Lexical pre-cluster
+    1. Collect all unique KPI rows (name + computation content) from calculated_fields
+    2. Content-based pre-cluster (fingerprint / source+type / formula_pattern / definition)
     3. Optionally refine with LLM
-    4. Write results to kpi_cluster_cache table
+    4. Detect and log intra-workbook formula duplicates
+    5. Write results to kpi_cluster_cache table
 
     Returns the list of canonical clusters.
     """
-    # 1. Collect unique KPI names + metadata
+    # 1. Collect KPI rows with full computation content
     if workbook_ids:
         placeholders = ",".join("?" * len(workbook_ids))
         rows = db.query(f"""
-            SELECT DISTINCT name, fingerprint, ultimate_raw_sources
+            SELECT DISTINCT
+                name,
+                fingerprint,
+                ultimate_raw_sources,
+                formula_pattern,
+                definition,
+                computation_type
             FROM calculated_fields
-            WHERE column_type IN ('formula_based', 'pivot_value')
+            WHERE column_type IN ('formula_based', 'pivot_value', 'total')
               AND workbook_id IN ({placeholders})
         """, tuple(workbook_ids))
     else:
         rows = db.query("""
-            SELECT DISTINCT name, fingerprint, ultimate_raw_sources
+            SELECT DISTINCT
+                name,
+                fingerprint,
+                ultimate_raw_sources,
+                formula_pattern,
+                definition,
+                computation_type
             FROM calculated_fields
-            WHERE column_type IN ('formula_based', 'pivot_value')
+            WHERE column_type IN ('formula_based', 'pivot_value', 'total')
         """)
 
     if not rows:
         logger.info("No calculated fields found — skipping KPI canonicalization")
         return []
 
-    kpi_names = list(set(r["name"] for r in rows))
-    logger.info("KPI canonicalization: %d unique KPI names", len(kpi_names))
-
-    # Build lookup maps
-    fingerprint_map: Dict[str, str] = {}
-    source_map: Dict[str, List[str]] = {}
+    # De-duplicate by name (keep first occurrence, DB DISTINCT covers content dupes)
+    seen_names: Set[str] = set()
+    unique_rows: List[Dict[str, Any]] = []
     for r in rows:
         name = r["name"]
-        fingerprint_map[name] = r.get("fingerprint", "") or ""
+        if name not in seen_names:
+            seen_names.add(name)
+            unique_rows.append(dict(r))
+
+    logger.info("KPI canonicalization: %d unique KPI names", len(unique_rows))
+
+    # Build legacy lookup maps (still needed for build_pre_cluster_context fallback)
+    fingerprint_map: Dict[str, str] = {
+        r["name"]: (r.get("fingerprint") or "") for r in unique_rows
+    }
+    source_map: Dict[str, List[str]] = {}
+    for r in unique_rows:
         raw_src = r.get("ultimate_raw_sources", "[]")
         if isinstance(raw_src, str):
             try:
-                source_map[name] = json.loads(raw_src)
+                source_map[r["name"]] = json.loads(raw_src)
             except Exception:
-                source_map[name] = []
+                source_map[r["name"]] = []
         elif isinstance(raw_src, list):
-            source_map[name] = raw_src
+            source_map[r["name"]] = raw_src
         else:
-            source_map[name] = []
+            source_map[r["name"]] = []
 
-    # 2. Lexical pre-clustering
-    clusters = lexical_pre_cluster(kpi_names, threshold=0.85)
-    logger.info("Lexical pre-clustering: %d clusters from %d names", len(clusters), len(kpi_names))
+    # 2. Content-based pre-clustering
+    clusters = content_based_pre_cluster(unique_rows)
+    logger.info(
+        "Content-based pre-clustering: %d clusters from %d names",
+        len(clusters), len(unique_rows),
+    )
 
     # 3. LLM refinement (if available)
-    final_clusters = []
-    cluster_method = "lexical"
+    final_clusters: List[Dict[str, Any]] = []
+    cluster_method = "content"
 
     if llm_caller is not None:
         try:
@@ -209,30 +341,59 @@ def run_kpi_canonicalization(
 
             response = llm_caller(prompt)
             if response and isinstance(response, list):
-                final_clusters = response
+                # Validate: canonical_name must be one of the member names.
+                # If the LLM invented a name, fall back to the longest member
+                # (longest is usually the most descriptive extracted name).
+                validated = []
+                for cluster in response:
+                    members = cluster.get("members", [])
+                    canonical = cluster.get("canonical_name", "")
+                    member_set = set(members)
+                    if canonical not in member_set:
+                        original = canonical
+                        canonical = max(members, key=len) if members else (members[0] if members else "")
+                        logger.warning(
+                            "LLM returned invented canonical name %r (not in members) — "
+                            "replaced with extracted name %r",
+                            original, canonical,
+                        )
+                    validated.append({**cluster, "canonical_name": canonical})
+                final_clusters = validated
                 cluster_method = "llm"
                 logger.info("LLM refined KPI clusters: %d groups", len(final_clusters))
         except Exception as e:
-            logger.warning("LLM KPI canonicalization failed, using lexical fallback: %s", e)
+            logger.warning("LLM KPI canonicalization failed, using content fallback: %s", e)
 
-    # Fallback to lexical clusters
+    # Fallback: use content clusters directly, shortest name as canonical
     if not final_clusters:
         for cluster in clusters:
-            # Use the shortest name as canonical (often the cleanest)
-            canonical = min(cluster, key=len)
+            members = cluster.get("members", [])
+            canonical = min(members, key=len) if members else ""
+            # Determine a representative method label from the strongest signal
+            signals = cluster.get("match_signals", {})
+            method = "content"
+            for sig in ("fingerprint", "source_type", "pattern", "definition"):
+                if sig in signals:
+                    method = sig
+                    break
             final_clusters.append({
                 "canonical_name": canonical,
-                "members": cluster,
+                "members": members,
+                "_method": method,
             })
+        cluster_method = None  # use per-cluster method below
 
-    # 4. Write to kpi_cluster_cache
+    # 4. Intra-workbook formula duplicate detection
+    _log_intra_workbook_duplicates(db, workbook_ids)
+
+    # 5. Write to kpi_cluster_cache
     if workbook_ids:
         placeholders = ",".join("?" * len(workbook_ids))
-        scoped_names = db.query(f"""
-            SELECT DISTINCT cf.name FROM calculated_fields cf
-            WHERE cf.workbook_id IN ({placeholders})
+        scoped_rows = db.query(f"""
+            SELECT DISTINCT name FROM calculated_fields
+            WHERE workbook_id IN ({placeholders})
         """, tuple(workbook_ids))
-        scoped_name_set = {r["name"] for r in scoped_names}
+        scoped_name_set = {r["name"] for r in scoped_rows}
         existing = db.query("SELECT original_name FROM kpi_cluster_cache")
         for row in existing:
             if row["original_name"] in scoped_name_set:
@@ -246,17 +407,77 @@ def run_kpi_canonicalization(
     for cluster in final_clusters:
         canonical = cluster.get("canonical_name", "")
         members = cluster.get("members", [])
+        method = cluster_method if cluster_method else cluster.get("_method", "content")
+        # LLM clusters get full confidence; content-signal clusters get 0.9
+        confidence = 1.0 if method == "llm" else 0.9
+
         for member in members:
             try:
                 db.insert("kpi_cluster_cache", {
                     "original_name": member,
                     "canonical_name": canonical,
-                    "cluster_method": cluster_method,
-                    "confidence": 1.0 if cluster_method == "llm" else 0.85,
+                    "cluster_method": method,
+                    "confidence": confidence,
                 })
             except Exception as e:
-                # Handle duplicates gracefully
                 logger.debug("Skipping duplicate KPI cluster entry '%s': %s", member, e)
 
-    logger.info("KPI cluster cache populated: %d entries", len(kpi_names))
+    logger.info("KPI cluster cache populated: %d entries", len(unique_rows))
     return final_clusters
+
+
+def _log_intra_workbook_duplicates(
+    db: Database,
+    workbook_ids: Optional[List[int]] = None,
+) -> None:
+    """
+    Detect and log columns within the same workbook that share an identical
+    fingerprint on different column names (same formula, same report).
+
+    These are intra-workbook redundancies — the same calculation is
+    defined multiple times in one report under different column headers.
+    """
+    if workbook_ids:
+        placeholders = ",".join("?" * len(workbook_ids))
+        rows = db.query(f"""
+            SELECT workbook_id, name, fingerprint
+            FROM calculated_fields
+            WHERE column_type IN ('formula_based', 'pivot_value', 'total')
+              AND fingerprint IS NOT NULL
+              AND fingerprint != ''
+              AND workbook_id IN ({placeholders})
+        """, tuple(workbook_ids))
+    else:
+        rows = db.query("""
+            SELECT workbook_id, name, fingerprint
+            FROM calculated_fields
+            WHERE column_type IN ('formula_based', 'pivot_value', 'total')
+              AND fingerprint IS NOT NULL
+              AND fingerprint != ''
+        """)
+
+    # Group by (workbook_id, fingerprint)
+    wb_fp: Dict[Tuple[int, str], List[str]] = {}
+    for r in rows:
+        key = (r["workbook_id"], r["fingerprint"])
+        wb_fp.setdefault(key, []).append(r["name"])
+
+    dupes = [
+        (wb_id, fp, names)
+        for (wb_id, fp), names in wb_fp.items()
+        if len(set(names)) > 1
+    ]
+
+    if dupes:
+        logger.info(
+            "Intra-workbook formula duplicates found: %d fingerprint(s) shared "
+            "across multiple column names within the same workbook",
+            len(dupes),
+        )
+        for wb_id, fp, names in dupes:
+            logger.info(
+                "  Workbook %d | fingerprint=%r | duplicate columns: %s",
+                wb_id, fp, names,
+            )
+    else:
+        logger.info("No intra-workbook formula duplicates detected")

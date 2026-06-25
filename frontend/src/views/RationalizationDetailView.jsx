@@ -22,6 +22,7 @@ function cleanReasons(reasons) {
 function getWorkbookKpis(wId, fields, clusters) {
   if (!fields || !clusters) return [];
   
+  // Build a case-insensitive canonical name lookup map
   const canonMap = {};
   clusters.forEach(c => {
     if (c.original_names) {
@@ -32,18 +33,22 @@ function getWorkbookKpis(wId, fields, clusters) {
   });
 
   const wbFields = fields.filter(
-    cf => cf.workbook_id === wId && 
-    (cf.column_type === 'formula_based' || cf.column_type === 'pivot_value')
+    cf => cf.workbook_id === wId &&
+    (cf.column_type === 'formula_based' || cf.column_type === 'pivot_value' || cf.column_type === 'total')
   );
 
-  const kpiSet = new Set();
+  // Use a Map keyed by lowercase canonical name to deduplicate case-insensitively
+  const kpiMap = new Map();
   wbFields.forEach(cf => {
     const origLower = cf.name.toLowerCase();
     const canonName = canonMap[origLower] || cf.name;
-    kpiSet.add(canonName);
+    const dedupeKey = canonName.toLowerCase();
+    if (!kpiMap.has(dedupeKey)) {
+      kpiMap.set(dedupeKey, canonName);
+    }
   });
 
-  return Array.from(kpiSet);
+  return Array.from(kpiMap.values());
 }
 
 export default function RationalizationDetailView() {

@@ -25,6 +25,20 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
+def _orient_unique_kpis(
+    overlap: Dict[str, Any],
+    wb_id: int,
+    partner_id: int,
+) -> Tuple[List[str], List[str]]:
+    """Return (unique_to_wb, unique_to_partner) from a pairwise overlap record."""
+    pair_a, pair_b = min(wb_id, partner_id), max(wb_id, partner_id)
+    unique_a = overlap.get("unique_kpis_a", [])
+    unique_b = overlap.get("unique_kpis_b", [])
+    if wb_id == pair_a:
+        return list(unique_a), list(unique_b)
+    return list(unique_b), list(unique_a)
+
+
 class Recommender:
     """Generates rationalization recommendations using deterministic rules + LLM."""
 
@@ -86,26 +100,73 @@ class Recommender:
                 extraction_quality = 1.0
 
             # Get overlap data for the most similar pair
-            common_kpis = []
+            best_pair_common_kpis = []
             common_ds = []
             matching_fps = []
             if most_similar_id:
                 pair_key = (min(wb_id, most_similar_id), max(wb_id, most_similar_id))
                 overlap = pairwise.get(pair_key, {})
-                common_kpis = overlap.get("common_kpis", [])
+                best_pair_common_kpis = overlap.get("common_kpis", [])
                 common_ds = overlap.get("common_datasources", [])
                 matching_fps = overlap.get("matching_fingerprints", [])
                 max_fp_ratio = overlap.get("fingerprint_ratio", max_fp_ratio)
 
+            # Aggregate common_kpis from ALL pairwise entries involving this workbook
+            all_common_kpis = set(best_pair_common_kpis)
+            for (id_a, id_b), pair_overlap in pairwise.items():
+                if id_a == wb_id or id_b == wb_id:
+                    for kpi in pair_overlap.get("common_kpis", []):
+                        all_common_kpis.add(kpi)
+            common_kpis = sorted(all_common_kpis)
+
             # Decision matrix with safety gates
             action = "keep"
             reasons = []
+            canonical_keeper = False
+
+            unique_self: List[str] = []
+            unique_partner: List[str] = []
+            if most_similar_id and overlap:
+                unique_self, unique_partner = _orient_unique_kpis(
+                    overlap, wb_id, most_similar_id
+                )
+
+            has_common = len(best_pair_common_kpis) > 0
+            self_is_kpi_subset = (
+                has_common and len(unique_self) == 0 and len(unique_partner) > 0
+            )
+            partner_is_kpi_subset = (
+                has_common and len(unique_partner) == 0 and len(unique_self) > 0
+            )
+            both_have_extras = len(unique_self) > 0 and len(unique_partner) > 0
+            kpi_sets_identical = (
+                has_common and len(unique_self) == 0 and len(unique_partner) == 0
+            )
 
             if extraction_quality < self.min_extraction_quality:
                 action = "review"
                 reasons.append(
                     f"Extraction quality {extraction_quality:.0%} is below "
                     f"{self.min_extraction_quality:.0%} — manual review required before decommission."
+                )
+            elif self_is_kpi_subset and max_ds >= self.merge_ds:
+                action = "decommission"
+                reasons.append(
+                    f"All {len(best_pair_common_kpis)} KPIs in this workbook are already "
+                    f"present in '{most_similar_name}' "
+                    f"({len(unique_partner)} additional KPIs only in retain target)."
+                )
+            elif partner_is_kpi_subset:
+                action = "keep"
+                canonical_keeper = True
+                reasons.append(
+                    f"Superset of '{most_similar_name}' — covers all of its KPIs plus "
+                    f"{len(unique_self)} additional KPIs only in this workbook."
+                )
+            elif kpi_sets_identical and max_ds >= self.merge_ds:
+                action = "decommission"
+                reasons.append(
+                    f"Identical KPI set to '{most_similar_name}' — duplicate report."
                 )
             elif (
                 max_kpi >= self.decommission_kpi
@@ -117,11 +178,17 @@ class Recommender:
                     f"High KPI overlap ({max_kpi:.0%}) and datasource overlap ({max_ds:.0%}) "
                     f"with '{most_similar_name}'."
                 )
-            elif max_kpi >= self.merge_kpi and max_ds >= self.merge_ds:
+            elif (
+                both_have_extras
+                and max_kpi >= self.merge_kpi
+                and max_ds >= self.merge_ds
+            ):
                 action = "merge"
+                overlap_label = "High" if max_kpi >= 0.80 and max_ds >= 0.80 else "Moderate"
                 reasons.append(
-                    f"Moderate KPI overlap ({max_kpi:.0%}) and datasource overlap ({max_ds:.0%}) "
-                    f"with '{most_similar_name}' — candidate for consolidation."
+                    f"{overlap_label} KPI overlap ({max_kpi:.0%}) and datasource overlap ({max_ds:.0%}) "
+                    f"with '{most_similar_name}' — both workbooks add unique KPIs; "
+                    f"candidate for consolidation."
                 )
             elif uni_score >= self.keep_uniqueness:
                 action = "keep"
@@ -136,8 +203,16 @@ class Recommender:
                 "workbook_id": wb_id,
                 "workbook_name": wb["name"],
                 "action": action,
-                "merge_with_name": most_similar_name if action in ("merge", "decommission") else None,
-                "merge_with_id": most_similar_id if action in ("merge", "decommission") else None,
+                "merge_with_name": (
+                    most_similar_name
+                    if action in ("merge", "decommission")
+                    else None
+                ),
+                "merge_with_id": (
+                    most_similar_id
+                    if action in ("merge", "decommission")
+                    else None
+                ),
                 "reasons": reasons,
                 "common_kpis": common_kpis,
                 "common_datasources": common_ds,
@@ -148,6 +223,8 @@ class Recommender:
                 "llm_override": False,
                 "llm_justification": None,
             }
+            if canonical_keeper:
+                decisions[wb_id]["_canonical_keeper"] = True
 
         # ── Step 1b: Resolve symmetric decommission conflicts ─
         self._resolve_decommission_conflicts(decisions, wb_map)
@@ -162,6 +239,9 @@ class Recommender:
         # ── Step 3b: Reconcile after LLM (overrides must not break pairs) ─
         self._resolve_decommission_conflicts(decisions, wb_map)
         self._normalize_decommission_rows(decisions, wb_map)
+
+        # ── Step 3c: Make merge recommendations symmetric ────
+        self._normalize_merge_pairs(decisions, wb_map)
 
         # ── Step 4: Route unresolved ambiguous pairs to review ─
         for (id_a, id_b) in ambiguous_pairs:
@@ -315,6 +395,57 @@ class Recommender:
                 "Decommission requires a retain target — manual review required."
             )
 
+    def _normalize_merge_pairs(
+        self,
+        decisions: Dict[int, Dict[str, Any]],
+        wb_map: Dict[int, Dict],
+    ) -> None:
+        """
+        Ensure merge recommendations are symmetric.
+
+        The Jaccard overlap score is symmetric, so if A qualifies to merge
+        with B, B qualifies to merge with A. However, B might independently
+        have chosen a different most-similar partner C and be marked 'keep'.
+
+        For every A→merge with B where B says 'keep':
+          - Update B to 'merge' pointing back at A, using the same overlap
+            scores that triggered A's merge decision.
+
+        For every A→merge with B where B says 'merge with C' (chain case):
+          - Leave the chain as-is. The user sees both sides and can resolve.
+
+        Never override canonical-keeper or decommission decisions.
+        """
+        for wb_id, decision in list(decisions.items()):
+            if decision.get("action") != "merge":
+                continue
+            partner_id = decision.get("merge_with_id")
+            if not partner_id:
+                continue
+            partner = decisions.get(partner_id)
+            if not partner:
+                continue
+            # Never touch canonical keepers or decommission targets
+            if partner.get("_canonical_keeper") or partner.get("action") == "decommission":
+                continue
+            # Only mirror when partner says keep — chains (B→C) are left alone
+            if partner.get("action") != "keep":
+                continue
+
+            partner["action"] = "merge"
+            partner["merge_with_id"] = wb_id
+            partner["merge_with_name"] = wb_map.get(wb_id, {}).get("name", "")
+            partner["reasons"].append(
+                f"Identified as consolidation candidate with '{decision['workbook_name']}' "
+                f"(KPI overlap: {decision.get('kpi_overlap_score', 0):.0%}, "
+                f"datasource overlap: {decision.get('datasource_overlap_score', 0):.0%})."
+            )
+            logger.info(
+                "Merge pair normalized: '%s' ↔ '%s'",
+                decision["workbook_name"],
+                partner.get("workbook_name", ""),
+            )
+
     def _should_route_ambiguous_to_review(
         self,
         wb_id: int,
@@ -400,13 +531,21 @@ class Recommender:
                     confidence = response.get("confidence", 0.0)
 
                     if same_work and confidence > 0.7:
+                        # Require minimum overlap scores even for LLM same_work verdicts —
+                        # the ambiguous-pair combined score gate (0.30–0.85) lets through
+                        # pairs with very low KPI/DS scores if structural overlap is high.
+                        kpi_score = overlap.get("kpi_overlap", 0.0)
+                        ds_score = overlap.get("ds_overlap", 0.0)
+                        scores_support_merge = (
+                            kpi_score >= self.merge_kpi and ds_score >= self.merge_ds
+                        )
                         for wb_id in (id_a, id_b):
                             if decisions.get(wb_id, {}).get("_canonical_keeper"):
                                 continue
                             other_id = id_b if wb_id == id_a else id_a
                             if decisions.get(wb_id, {}).get("action") in ("keep", "review"):
                                 eq = wb_map.get(wb_id, {}).get("extraction_quality_score") or 1.0
-                                if eq >= self.min_extraction_quality:
+                                if eq >= self.min_extraction_quality and scores_support_merge:
                                     decisions[wb_id]["action"] = "merge"
                                     decisions[wb_id]["merge_with_id"] = other_id
                                     decisions[wb_id]["merge_with_name"] = wb_map.get(other_id, {}).get("name", "")
@@ -415,6 +554,13 @@ class Recommender:
                                         f"LLM assessment: same work (confidence={confidence:.0%}). "
                                         f"{response.get('reasoning', '')}"
                                     )
+                                elif not scores_support_merge:
+                                    logger.info(
+                                        "LLM same_work verdict rejected for '%s'/'%s': "
+                                        "KPI=%.2f DS=%.2f below merge thresholds",
+                                        wb_a.get("name"), wb_b.get("name"), kpi_score, ds_score,
+                                    )
+                                    unresolved.append((id_a, id_b))
                         logger.info(
                             "LLM: pair (%s, %s) assessed as same_work=%s (confidence=%.2f)",
                             wb_a.get("name"), wb_b.get("name"), same_work, confidence
@@ -480,6 +626,34 @@ class Recommender:
                                             f"LLM suggested {final_action} (not applied — canonical retain): "
                                             f"{item['override_reason']}"
                                         )
+                                    elif final_action == "merge" and action_group in ("keep", "review"):
+                                        # Gate: LLM can only override keep/review → merge if the
+                                        # overlap scores actually meet merge criteria. Without this
+                                        # guard the LLM hallucinates merges for completely distinct
+                                        # workbooks (e.g. 4% KPI, 0% DS → incorrectly "merge").
+                                        kpi_ok = decisions[wb_id].get("kpi_overlap_score", 0.0) >= self.merge_kpi
+                                        ds_ok = decisions[wb_id].get("datasource_overlap_score", 0.0) >= self.merge_ds
+                                        if kpi_ok and ds_ok:
+                                            decisions[wb_id]["action"] = final_action
+                                            decisions[wb_id]["llm_override"] = True
+                                            decisions[wb_id]["reasons"].append(
+                                                f"LLM override: {item['override_reason']}"
+                                            )
+                                        else:
+                                            decisions[wb_id]["reasons"].append(
+                                                f"LLM suggested merge (not applied — scores too low: "
+                                                f"KPI={decisions[wb_id].get('kpi_overlap_score', 0):.0%}, "
+                                                f"DS={decisions[wb_id].get('datasource_overlap_score', 0):.0%}): "
+                                                f"{item['override_reason']}"
+                                            )
+                                            logger.info(
+                                                "LLM merge override rejected for '%s': KPI=%.2f DS=%.2f "
+                                                "(thresholds: KPI>=%.2f, DS>=%.2f)",
+                                                wb_map.get(wb_id, {}).get("name", ""),
+                                                decisions[wb_id].get("kpi_overlap_score", 0.0),
+                                                decisions[wb_id].get("datasource_overlap_score", 0.0),
+                                                self.merge_kpi, self.merge_ds,
+                                            )
                                     else:
                                         decisions[wb_id]["action"] = final_action
                                         decisions[wb_id]["llm_override"] = True

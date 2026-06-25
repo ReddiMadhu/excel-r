@@ -116,7 +116,10 @@ async def get_pairwise_matrix(
             fingerprint_ratio=round(overlap.get("fingerprint_ratio", 0), 4),
             combined_score=round(overlap.get("combined_score", 0), 4),
             overlap_class=overlap.get("overlap_class", "distinct"),
+            overlap_relationship=overlap.get("overlap_relationship", "distinct"),
             common_kpis=overlap.get("common_kpis", []),
+            unique_kpis_a=overlap.get("unique_kpis_a", []),
+            unique_kpis_b=overlap.get("unique_kpis_b", []),
         ))
 
     return PairwiseMatrixResponse(
