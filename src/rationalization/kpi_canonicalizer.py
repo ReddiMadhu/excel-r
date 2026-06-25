@@ -71,6 +71,65 @@ def _enrich_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+def _names_contradict(a_name: str, b_name: str) -> bool:
+    """
+    Return True if two KPI names contain contradictory qualifiers that
+    indicate they are semantically different metrics.
+
+    E.g. "Flexible Premium" vs "Non-Flexible Premium" → True
+         "Net Reserve" vs "Gross Reserve"              → True
+         "YRT Reserve" vs "YRT Face Amount"            → False (different, not contradictory)
+    """
+    a_lower = a_name.lower().strip()
+    b_lower = b_name.lower().strip()
+
+    if a_lower == b_lower:
+        return False
+
+    # ── Explicit contradictory term pairs ─────────────────────
+    _CONTRADICTORY_PAIRS = [
+        ("flexible", "non-flexible"),
+        ("flexible", "non flexible"),
+        ("flexible", "nonflexible"),
+        ("net", "gross"),
+        ("inforce", "new business"),
+        ("current", "prior"),
+        ("actual", "expected"),
+        ("beginning", "ending"),
+        ("opening", "closing"),
+        ("increase", "decrease"),
+        ("credit", "debit"),
+        ("positive", "negative"),
+        ("direct", "assumed"),
+        ("direct", "ceded"),
+        ("assumed", "ceded"),
+    ]
+    for term1, term2 in _CONTRADICTORY_PAIRS:
+        if (term1 in a_lower and term2 in b_lower) or \
+           (term2 in a_lower and term1 in b_lower):
+            return True
+
+    # ── Generic negation-prefix detection ─────────────────────
+    # Catches patterns like "X" vs "non-X", "non X", "not X", etc.
+    a_tokens = set(re.split(r"[\s_\-]+", a_lower))
+    b_tokens = set(re.split(r"[\s_\-]+", b_lower))
+
+    negation_tokens = {"non", "not", "no", "un"}
+    a_has_neg = bool(a_tokens & negation_tokens)
+    b_has_neg = bool(b_tokens & negation_tokens)
+
+    if a_has_neg != b_has_neg:
+        # One name has a negation token and the other does not —
+        # if the remaining tokens overlap they likely describe the
+        # same concept but with opposite meaning.
+        a_rest = a_tokens - negation_tokens
+        b_rest = b_tokens - negation_tokens
+        if a_rest & b_rest:
+            return True
+
+    return False
+
+
 def _content_match(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[str]:
     """
     Return the strongest matching signal name if rows a and b represent
@@ -81,10 +140,19 @@ def _content_match(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[str]:
       2. source_type  — same normalized source set + same computation type
       3. pattern      — same formula_pattern string
       4. definition   — same normalized definition text
+
+    Signals 2-4 are guarded by a name-contradiction check: KPIs whose
+    names contain opposite qualifiers (e.g. "Flexible" vs "Non-Flexible")
+    are never clustered together on these weaker signals.
     """
-    # 1. Exact fingerprint match
+    # 1. Exact fingerprint match — trusted unconditionally because
+    #    identical fingerprints mean the formulas are character-identical.
     if a["_fp"] and a["_fp"] == b["_fp"]:
         return "fingerprint"
+
+    # Guard: reject weaker signals when names are contradictory
+    if _names_contradict(a.get("name", ""), b.get("name", "")):
+        return None
 
     # 2. Same sources + same computation type (both non-empty)
     if (
