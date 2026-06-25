@@ -228,6 +228,54 @@ def build_graph_data(
     return nodes, links, matched_dashboards
 
 
+def _load_kpi_canonical_map(db) -> dict:
+    cluster_rows = db.query("SELECT original_name, canonical_name FROM kpi_cluster_cache")
+    return {row["original_name"].lower(): row["canonical_name"] for row in cluster_rows}
+
+
+def _kpi_node_id(canon_name: str) -> str:
+    return f"kpi_{canon_name.lower().replace(' ', '_')}"
+
+
+def _add_workbook_kpi_nodes(
+    db,
+    workbook_ids: List[int],
+    add_node,
+    add_link,
+    kpi_map: dict,
+) -> None:
+    """Add Report -> KPI links for rationalization review graphs."""
+    if not workbook_ids:
+        return
+
+    placeholders = ",".join("?" * len(workbook_ids))
+    dashboards = db.query(
+        f"""
+        SELECT d.id, d.workbook_id, d.sheet_type
+        FROM dashboards d
+        WHERE d.workbook_id IN ({placeholders})
+          AND (d.sheet_type IS NULL OR d.sheet_type != 'raw_data')
+        """,
+        tuple(workbook_ids),
+    )
+
+    linked: Set[Tuple[int, str]] = set()
+    for dash in dashboards:
+        wb_node = f"wb_{dash['workbook_id']}"
+        cfs = db.query(
+            "SELECT name, definition FROM calculated_fields WHERE dashboard_id = ?",
+            (dash["id"],),
+        )
+        for cf in cfs:
+            canon_name = kpi_map.get(cf["name"].lower(), cf["name"])
+            kid = _kpi_node_id(canon_name)
+            if (dash["workbook_id"], kid) in linked:
+                continue
+            linked.add((dash["workbook_id"], kid))
+            add_node(kid, "KPI", canon_name, {"definition": cf.get("definition") or ""})
+            add_link(wb_node, kid, "has_kpi")
+
+
 def build_rationalization_graph(workbook_ids: Optional[List[int]] = None):
     """
     Workbook-centric graph for rationalization: pairwise overlap edges,
@@ -296,6 +344,9 @@ def build_rationalization_graph(workbook_ids: Optional[List[int]] = None):
             },
         )
 
+    kpi_map = _load_kpi_canonical_map(db)
+    _add_workbook_kpi_nodes(db, wb_id_list, add_node, add_link, kpi_map)
+
     for (id_a, id_b), ov in pairwise.items():
         kpi_ov = ov.get("kpi_overlap", 0)
         ds_ov = ov.get("ds_overlap", 0)
@@ -316,22 +367,10 @@ def build_rationalization_graph(workbook_ids: Optional[List[int]] = None):
             },
         )
 
-    kpi_to_wbs: dict = {}
     ds_to_wbs: dict = {}
     for (id_a, id_b), ov in pairwise.items():
-        for kpi in ov.get("common_kpis", []):
-            kpi_to_wbs.setdefault(kpi, set()).update([id_a, id_b])
         for ds in ov.get("common_datasources", []):
             ds_to_wbs.setdefault(ds, set()).update([id_a, id_b])
-
-    for kpi, wb_set in kpi_to_wbs.items():
-        if len(wb_set) < 2:
-            continue
-        safe = re.sub(r"[^a-z0-9_]+", "_", kpi.lower())[:48]
-        kid = f"shared_kpi_{safe}"
-        add_node(kid, "Shared KPI", kpi)
-        for wid in wb_set:
-            add_link(f"wb_{wid}", kid, "shares_kpi")
 
     for ds, wb_set in ds_to_wbs.items():
         if len(wb_set) < 2:

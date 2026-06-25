@@ -9,6 +9,7 @@ const COLOR_MAP = {
   'Dashboard': '#2563eb',         // Royal Blue
   'KPI': '#10b981',               // Emerald Green
   'Shared KPI': '#d946ef',        // Bright Fuchsia
+  'Unique KPI': '#f59e0b',        // Amber — exclusive to one report
   'Line of Business': '#8b5cf6',  // Violet
   'Business Area': '#a855f7',     // Purple
   'User Group': '#ec4899',        // Pink
@@ -22,6 +23,7 @@ const LEGEND_ITEMS = [
   { group: 'Dashboard', label: 'Sheet' },
   { group: 'KPI', label: 'KPI' },
   { group: 'Shared KPI', label: 'Shared KPI' },
+  { group: 'Unique KPI', label: 'Unique KPI' },
   { group: 'Line of Business', label: 'Line of Business' },
   { group: 'Business Area', label: 'Business Area' },
   { group: 'User Group', label: 'User Group' },
@@ -115,7 +117,30 @@ export function KPIDashboardGraph({
           throw new Error('No graph nodes found for the selected scope.');
         }
 
-        setPresentGroups(new Set(data.nodes.map(n => n.group)));
+        const sharedKpiIds = new Set();
+        const uniqueKpiIds = new Set();
+        data.nodes.forEach(n => {
+          if (n.group !== 'KPI') return;
+          const connectedWbs = new Set();
+          data.links.forEach(l => {
+            const s = typeof l.source === 'object' ? l.source.id : l.source;
+            const t = typeof l.target === 'object' ? l.target.id : l.target;
+            if (s === n.id) {
+              const other = data.nodes.find(node => node.id === t);
+              if (other && (other.group === 'Report' || other.group === 'Dashboard')) connectedWbs.add(other.id);
+            }
+            if (t === n.id) {
+              const other = data.nodes.find(node => node.id === s);
+              if (other && (other.group === 'Report' || other.group === 'Dashboard')) connectedWbs.add(other.id);
+            }
+          });
+          if (connectedWbs.size > 1) sharedKpiIds.add(n.id);
+          else if (connectedWbs.size === 1) uniqueKpiIds.add(n.id);
+        });
+        const legendGroups = new Set(data.nodes.map(n => n.group));
+        if (sharedKpiIds.size > 0) legendGroups.add('Shared KPI');
+        if (uniqueKpiIds.size > 0) legendGroups.add('Unique KPI');
+        setPresentGroups(legendGroups);
         drawGraph(data.nodes, data.links);
       } catch (err) {
         console.error('Failed to load KPI graph:', err);
@@ -189,25 +214,33 @@ export function KPIDashboardGraph({
       linkSelectionRef.current = link;
       linkLabelSelectionRef.current = linkLabel;
 
-      // Compute shared nodes dynamically
+      // Compute shared / unique KPI nodes dynamically
       const sharedNodeIds = new Set();
+      const uniqueNodeIds = new Set();
+      const getConnectedReportIds = (nodeId) => {
+        const connectedWbs = new Set();
+        links.forEach(l => {
+          const s = typeof l.source === 'object' ? l.source.id : l.source;
+          const t = typeof l.target === 'object' ? l.target.id : l.target;
+          if (s === nodeId) {
+            const other = nodes.find(node => node.id === t);
+            if (other && (other.group === 'Report' || other.group === 'Dashboard')) connectedWbs.add(other.id);
+          }
+          if (t === nodeId) {
+            const other = nodes.find(node => node.id === s);
+            if (other && (other.group === 'Report' || other.group === 'Dashboard')) connectedWbs.add(other.id);
+          }
+        });
+        return connectedWbs;
+      };
+
       nodes.forEach(n => {
         if (n.group === 'KPI' || n.group === 'Datasource') {
-          const connectedWbs = new Set();
-          links.forEach(l => {
-            const s = typeof l.source === 'object' ? l.source.id : l.source;
-            const t = typeof l.target === 'object' ? l.target.id : l.target;
-            if (s === n.id) {
-              const other = nodes.find(node => node.id === t);
-              if (other && (other.group === 'Report' || other.group === 'Dashboard')) connectedWbs.add(other.id);
-            }
-            if (t === n.id) {
-              const other = nodes.find(node => node.id === s);
-              if (other && (other.group === 'Report' || other.group === 'Dashboard')) connectedWbs.add(other.id);
-            }
-          });
+          const connectedWbs = getConnectedReportIds(n.id);
           if (connectedWbs.size > 1) {
             sharedNodeIds.add(n.id);
+          } else if (connectedWbs.size === 1) {
+            uniqueNodeIds.add(n.id);
           }
         }
       });
@@ -235,6 +268,9 @@ export function KPIDashboardGraph({
           }
           if (d.group === 'KPI' && sharedNodeIds.has(d.id)) {
             return COLOR_MAP['Shared KPI'];
+          }
+          if (d.group === 'KPI' && uniqueNodeIds.has(d.id)) {
+            return COLOR_MAP['Unique KPI'];
           }
           if (d.group === 'Datasource' && sharedNodeIds.has(d.id)) {
             return COLOR_MAP['Shared Datasource'];
@@ -368,6 +404,54 @@ export function KPIDashboardGraph({
       });
     };
 
+    const isBridgeGroup = (group) => (
+      group === 'KPI' || group === 'Shared KPI' || group === 'Shared Datasource'
+    );
+
+    const highlightBridgesBetween = (srcId, tgtId, srcColor, tgtColor, flowClass = null) => {
+      nodes.forEach(n => {
+        if (!isBridgeGroup(n.group)) return;
+        const linksSrc = getLinksBetween(n.id, srcId);
+        const linksTgt = getLinksBetween(n.id, tgtId);
+
+        if (linksSrc.length > 0 && linksTgt.length > 0) {
+          nodesToHighlight.add(n.id);
+          linksSrc.forEach(l => {
+            linksToHighlight.add(l);
+            linkColors.set(l, srcColor);
+            linkStrokeWidths.set(l, 3);
+            if (flowClass) linkFlowClasses.set(l, flowClass);
+          });
+          linksTgt.forEach(l => {
+            linksToHighlight.add(l);
+            linkColors.set(l, tgtColor);
+            linkStrokeWidths.set(l, 3);
+          });
+          return;
+        }
+
+        if (n.group === 'KPI' && linksSrc.length > 0 && linksTgt.length === 0) {
+          nodesToHighlight.add(n.id);
+          linksSrc.forEach(l => {
+            linksToHighlight.add(l);
+            linkColors.set(l, srcColor);
+            linkStrokeWidths.set(l, 3);
+            if (flowClass) linkFlowClasses.set(l, flowClass);
+          });
+          return;
+        }
+
+        if (n.group === 'KPI' && linksTgt.length > 0 && linksSrc.length === 0) {
+          nodesToHighlight.add(n.id);
+          linksTgt.forEach(l => {
+            linksToHighlight.add(l);
+            linkColors.set(l, tgtColor);
+            linkStrokeWidths.set(l, 3);
+          });
+        }
+      });
+    };
+
     // 1. Reset all styles
     nodeSelection.style('opacity', 1);
     nodeSelection.selectAll('path')
@@ -423,27 +507,14 @@ export function KPIDashboardGraph({
               linkFlowClasses.set(l, 'flow');
             });
 
-            // Bridge nodes
-            nodes.forEach(n => {
-              if (n.group === 'Shared KPI' || n.group === 'Shared Datasource') {
-                const linksSrc = getLinksBetween(n.id, d.id);
-                const linksTgt = getLinksBetween(n.id, targetNode.id);
-                if (linksSrc.length > 0 && linksTgt.length > 0) {
-                  nodesToHighlight.add(n.id);
-                  linksSrc.forEach(l => {
-                    linksToHighlight.add(l);
-                    linkColors.set(l, 'var(--accent-rose)');
-                    linkStrokeWidths.set(l, 3);
-                    linkFlowClasses.set(l, 'flow');
-                  });
-                  linksTgt.forEach(l => {
-                    linksToHighlight.add(l);
-                    linkColors.set(l, 'var(--accent-emerald)');
-                    linkStrokeWidths.set(l, 3);
-                  });
-                }
-              }
-            });
+            // Shared + unique KPI bridges
+            highlightBridgesBetween(
+              d.id,
+              targetNode.id,
+              'var(--accent-rose)',
+              'var(--accent-emerald)',
+              'flow',
+            );
           } else {
             getLinksConnectedTo(d.id).forEach(l => {
               linksToHighlight.add(l);
@@ -471,27 +542,13 @@ export function KPIDashboardGraph({
               linkFlowClasses.set(l, 'pulse');
             });
 
-            // Bridge nodes
-            nodes.forEach(n => {
-              if (n.group === 'Shared KPI' || n.group === 'Shared Datasource') {
-                const linksSrc = getLinksBetween(n.id, d.id);
-                const linksTgt = getLinksBetween(n.id, targetNode.id);
-                if (linksSrc.length > 0 && linksTgt.length > 0) {
-                  nodesToHighlight.add(n.id);
-                  linksSrc.forEach(l => {
-                    linksToHighlight.add(l);
-                    linkColors.set(l, 'var(--accent-amber)');
-                    linkStrokeWidths.set(l, 3.5);
-                    linkFlowClasses.set(l, 'pulse');
-                  });
-                  linksTgt.forEach(l => {
-                    linksToHighlight.add(l);
-                    linkColors.set(l, 'var(--accent-emerald)');
-                    linkStrokeWidths.set(l, 3.5);
-                  });
-                }
-              }
-            });
+            highlightBridgesBetween(
+              d.id,
+              targetNode.id,
+              'var(--accent-amber)',
+              'var(--accent-emerald)',
+              'pulse',
+            );
           } else {
             getLinksConnectedTo(d.id).forEach(l => {
               linksToHighlight.add(l);
@@ -562,27 +619,13 @@ export function KPIDashboardGraph({
               linkFlowClasses.set(l, 'flow');
             });
 
-            // Bridge nodes
-            nodes.forEach(n => {
-              if (n.group === 'Shared KPI' || n.group === 'Shared Datasource') {
-                const linksSrc = getLinksBetween(n.id, srcNode.id);
-                const linksTgt = getLinksBetween(n.id, targetNode.id);
-                if (linksSrc.length > 0 && linksTgt.length > 0) {
-                  nodesToHighlight.add(n.id);
-                  linksSrc.forEach(l => {
-                    linksToHighlight.add(l);
-                    linkColors.set(l, 'var(--accent-rose)');
-                    linkStrokeWidths.set(l, 3);
-                    linkFlowClasses.set(l, 'flow');
-                  });
-                  linksTgt.forEach(l => {
-                    linksToHighlight.add(l);
-                    linkColors.set(l, 'var(--accent-emerald)');
-                    linkStrokeWidths.set(l, 3);
-                  });
-                }
-              }
-            });
+            highlightBridgesBetween(
+              srcNode.id,
+              targetNode.id,
+              'var(--accent-rose)',
+              'var(--accent-emerald)',
+              'flow',
+            );
           } else {
             getLinksConnectedTo(srcNode.id).forEach(l => {
               linksToHighlight.add(l);
@@ -610,27 +653,13 @@ export function KPIDashboardGraph({
               linkFlowClasses.set(l, 'pulse');
             });
 
-            // Bridge nodes
-            nodes.forEach(n => {
-              if (n.group === 'Shared KPI' || n.group === 'Shared Datasource') {
-                const linksSrc = getLinksBetween(n.id, srcNode.id);
-                const linksTgt = getLinksBetween(n.id, targetNode.id);
-                if (linksSrc.length > 0 && linksTgt.length > 0) {
-                  nodesToHighlight.add(n.id);
-                  linksSrc.forEach(l => {
-                    linksToHighlight.add(l);
-                    linkColors.set(l, 'var(--accent-amber)');
-                    linkStrokeWidths.set(l, 3.5);
-                    linkFlowClasses.set(l, 'pulse');
-                  });
-                  linksTgt.forEach(l => {
-                    linksToHighlight.add(l);
-                    linkColors.set(l, 'var(--accent-emerald)');
-                    linkStrokeWidths.set(l, 3.5);
-                  });
-                }
-              }
-            });
+            highlightBridgesBetween(
+              srcNode.id,
+              targetNode.id,
+              'var(--accent-amber)',
+              'var(--accent-emerald)',
+              'pulse',
+            );
           } else {
             getLinksConnectedTo(srcNode.id).forEach(l => {
               linksToHighlight.add(l);
@@ -660,6 +689,24 @@ export function KPIDashboardGraph({
       
       if (activeHighlight === 'kpi') {
         nodes.forEach(n => { if (n.group === 'KPI') highlightTargets.add(n.id); });
+      } else if (activeHighlight === 'unique-kpi') {
+        nodes.forEach(n => {
+          if (n.group !== 'KPI') return;
+          const connectedWbs = new Set();
+          links.forEach(l => {
+            const s = getSourceId(l);
+            const t = getTargetId(l);
+            if (s === n.id) {
+              const other = nodes.find(node => node.id === t);
+              if (other && (other.group === 'Report' || other.group === 'Dashboard')) connectedWbs.add(other.id);
+            }
+            if (t === n.id) {
+              const other = nodes.find(node => node.id === s);
+              if (other && (other.group === 'Report' || other.group === 'Dashboard')) connectedWbs.add(other.id);
+            }
+          });
+          if (connectedWbs.size === 1) highlightTargets.add(n.id);
+        });
       } else if (activeHighlight === 'tables') {
         nodes.forEach(n => { if (n.group === 'Table') highlightTargets.add(n.id); });
       } else if (activeHighlight === 'user-group') {
@@ -669,34 +716,32 @@ export function KPIDashboardGraph({
       } else if (activeHighlight === 'datasource') {
         nodes.forEach(n => { if (n.group === 'Datasource') highlightTargets.add(n.id); });
       } else if (activeHighlight === 'common-kpi' || activeHighlight === 'shared-kpi') {
-        if (view === 'rationalization') {
-          nodes.forEach(n => { if (n.group === 'Shared KPI') highlightTargets.add(n.id); });
-        } else {
-          nodes.forEach(n => {
-            if (n.group === 'KPI') {
-              const connectedWbs = new Set();
-              links.forEach(l => {
-                const s = getSourceId(l);
-                const t = getTargetId(l);
-                if (s === n.id) {
-                  const other = nodes.find(node => node.id === t);
-                  if (other && (other.group === 'Report' || other.group === 'Dashboard')) {
-                    connectedWbs.add(other.id);
-                  }
+        nodes.forEach(n => {
+          if (n.group === 'KPI') {
+            const connectedWbs = new Set();
+            links.forEach(l => {
+              const s = getSourceId(l);
+              const t = getTargetId(l);
+              if (s === n.id) {
+                const other = nodes.find(node => node.id === t);
+                if (other && (other.group === 'Report' || other.group === 'Dashboard')) {
+                  connectedWbs.add(other.id);
                 }
-                if (t === n.id) {
-                  const other = nodes.find(node => node.id === s);
-                  if (other && (other.group === 'Report' || other.group === 'Dashboard')) {
-                    connectedWbs.add(other.id);
-                  }
-                }
-              });
-              if (connectedWbs.size > 1) {
-                highlightTargets.add(n.id);
               }
+              if (t === n.id) {
+                const other = nodes.find(node => node.id === s);
+                if (other && (other.group === 'Report' || other.group === 'Dashboard')) {
+                  connectedWbs.add(other.id);
+                }
+              }
+            });
+            if (connectedWbs.size > 1) {
+              highlightTargets.add(n.id);
             }
-          });
-        }
+          } else if (view === 'rationalization' && n.group === 'Shared KPI') {
+            highlightTargets.add(n.id);
+          }
+        });
       } else if (activeHighlight === 'shared-source') {
         if (view === 'rationalization') {
           nodes.forEach(n => { if (n.group === 'Shared Datasource') highlightTargets.add(n.id); });
@@ -816,6 +861,22 @@ export function KPIDashboardGraph({
             >
               Shared KPIs
             </button>
+            <button
+              onClick={() => handleHighlightClick('kpi')}
+              className={`btn ${activeHighlight === 'kpi' ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+            >
+              KPI Nodes
+            </button>
+            {presentGroups.has('Unique KPI') && (
+              <button
+                onClick={() => handleHighlightClick('unique-kpi')}
+                className={`btn ${activeHighlight === 'unique-kpi' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+              >
+                Unique KPIs
+              </button>
+            )}
             {presentGroups.has('Shared Datasource') && (
               <button
                 onClick={() => handleHighlightClick('shared-source')}

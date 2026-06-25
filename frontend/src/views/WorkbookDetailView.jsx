@@ -17,13 +17,10 @@ export default function WorkbookDetailView() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { data: wb, loading } = useApi(() => api.getWorkbook(id), [id]);
-  const { data: recs } = useApi(api.getRecommendations);
   const [activeSheet, setActiveSheet] = useState(null);
 
   if (loading || !wb) return <Loader />;
 
-  const rec = (recs || []).find(r => r.workbook_id === wb.id);
-  const displayAction = effectiveRecAction(wb.id, rec, recs);
   const dashboards = wb.dashboards || [];
   const selectedSheet = activeSheet !== null ? dashboards[activeSheet]
     : dashboards.length > 0 ? dashboards[0] : null;
@@ -82,67 +79,8 @@ export default function WorkbookDetailView() {
           {selectedSheet && <SheetDetail sheet={selectedSheet} />}
         </>
       )}
-
-      {rec && displayAction && displayAction !== 'keep' && (
-        <div className="card" style={{ marginTop: 24, borderColor: 'var(--accent-amber)', borderWidth: 1 }}>
-          <h3 style={{ marginBottom: 8, color: 'var(--accent-amber)' }}>
-            Rationalization Recommendation
-          </h3>
-          {displayAction === 'decommission' && rec.merge_with_name && (
-            <p className="text-secondary" style={{ marginBottom: 8 }}>
-              <strong>Decommission this report</strong> — retain &quot;{rec.merge_with_name}&quot;
-            </p>
-          )}
-          {displayAction === 'merge' && rec.merge_with_name && (
-            <p className="text-secondary" style={{ marginBottom: 8 }}>
-              <strong>Merge</strong> with &quot;{rec.merge_with_name}&quot;
-            </p>
-          )}
-          {displayAction !== 'decommission' && displayAction !== 'merge' && rec.merge_with_name && (
-            <p className="text-secondary" style={{ marginBottom: 8 }}>
-              <strong>{displayAction}</strong> — related to &quot;{rec.merge_with_name}&quot;
-            </p>
-          )}
-          {rec.reasons && filterDecommissionReasons(rec.reasons).map((r, i) => (
-            <p key={i} className="text-secondary" style={{ fontSize: '0.85rem' }}>• {r}</p>
-          ))}
-          {rec.common_kpis && rec.common_kpis.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <span className="text-muted" style={{ fontSize: '0.75rem' }}>Common KPIs: </span>
-              {rec.common_kpis.map((k, i) => (
-                <span key={i} className="badge badge-purple" style={{ marginRight: 4, marginTop: 4 }}>{k}</span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
-}
-
-function filterDecommissionReasons(reasons) {
-  return (reasons || []).filter(r => {
-    const lower = r.toLowerCase();
-    return !lower.includes('fingerprint')
-      && !lower.includes('retained report')
-      && !lower.includes('retained over');
-  });
-}
-
-function effectiveRecAction(wbId, rec, allRecs) {
-  if (!rec) return null;
-  const retainedBy = (allRecs || []).find(
-    r => (r.action === 'decommission' || r.action === 'delete') && r.merge_with_id === wbId
-  );
-  if (retainedBy && retainedBy.workbook_id !== wbId) return 'keep';
-  if (rec.action === 'decommission' || rec.action === 'delete') {
-    const opposing = (allRecs || []).find(
-      r => (r.action === 'decommission' || r.action === 'delete')
-        && r.workbook_id === rec.merge_with_id && r.merge_with_id === wbId
-    );
-    if (opposing && (rec.uniqueness_score || 0) > (opposing.uniqueness_score || 0)) return 'keep';
-  }
-  return rec.action;
 }
 
 function MetaItem({ label, value, highlight }) {
