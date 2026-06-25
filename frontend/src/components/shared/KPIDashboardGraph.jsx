@@ -34,7 +34,7 @@ const LEGEND_ITEMS = [
 
 const ACTION_COLORS = {
   keep: 'var(--accent-emerald)',
-  merge: 'var(--accent-amber)',
+  merge: '#8b5cf6',
   decommission: 'var(--status-decommission)',
   delete: 'var(--status-decommission)',
   review: 'var(--accent-blue)',
@@ -59,6 +59,7 @@ export function KPIDashboardGraph({
   onMinimize,
   filterAction = null,
   title = null,
+  legendExcludeGroups = [],
 }) {
   const svgRef = useRef(null);
   const containerRef = useRef(null);
@@ -537,7 +538,7 @@ export function KPIDashboardGraph({
             // Direct link
             getLinksBetween(d.id, targetNode.id).forEach(l => {
               linksToHighlight.add(l);
-              linkColors.set(l, 'var(--accent-amber)');
+              linkColors.set(l, ACTION_COLORS.merge);
               linkStrokeWidths.set(l, 5);
               linkFlowClasses.set(l, 'pulse');
             });
@@ -545,14 +546,14 @@ export function KPIDashboardGraph({
             highlightBridgesBetween(
               d.id,
               targetNode.id,
-              'var(--accent-amber)',
+              ACTION_COLORS.merge,
               'var(--accent-emerald)',
               'pulse',
             );
           } else {
             getLinksConnectedTo(d.id).forEach(l => {
               linksToHighlight.add(l);
-              linkColors.set(l, 'var(--accent-amber)');
+              linkColors.set(l, ACTION_COLORS.merge);
               linkStrokeWidths.set(l, 3.5);
               linkFlowClasses.set(l, 'pulse');
               const otherId = getSourceId(l) === d.id ? getTargetId(l) : getSourceId(l);
@@ -648,7 +649,7 @@ export function KPIDashboardGraph({
             // Direct link
             getLinksBetween(srcNode.id, targetNode.id).forEach(l => {
               linksToHighlight.add(l);
-              linkColors.set(l, 'var(--accent-amber)');
+              linkColors.set(l, ACTION_COLORS.merge);
               linkStrokeWidths.set(l, 5);
               linkFlowClasses.set(l, 'pulse');
             });
@@ -656,14 +657,14 @@ export function KPIDashboardGraph({
             highlightBridgesBetween(
               srcNode.id,
               targetNode.id,
-              'var(--accent-amber)',
+              ACTION_COLORS.merge,
               'var(--accent-emerald)',
               'pulse',
             );
           } else {
             getLinksConnectedTo(srcNode.id).forEach(l => {
               linksToHighlight.add(l);
-              linkColors.set(l, 'var(--accent-amber)');
+              linkColors.set(l, ACTION_COLORS.merge);
               linkStrokeWidths.set(l, 3.5);
               linkFlowClasses.set(l, 'pulse');
               const otherId = getSourceId(l) === srcNode.id ? getTargetId(l) : getSourceId(l);
@@ -977,7 +978,9 @@ export function KPIDashboardGraph({
           <div className="kpi-graph-legend">
             <div className="kpi-graph-legend-title">Legend</div>
             <div className="kpi-graph-legend-grid">
-              {LEGEND_ITEMS.filter(item => presentGroups.has(item.group)).map(item => (
+              {LEGEND_ITEMS.filter(item => (
+                presentGroups.has(item.group) && !legendExcludeGroups.includes(item.group)
+              )).map(item => (
                 <div key={item.group} className="kpi-graph-legend-item">
                   {getLegendShapeSvg(item.group, COLOR_MAP[item.group])}
                   <span className="kpi-graph-legend-label">{item.label}</span>
@@ -1018,6 +1021,7 @@ export function KPIDashboardGraph({
             height="100%"
             isMaximizedView={true}
             onMinimize={() => setIsMaximized(false)}
+            legendExcludeGroups={legendExcludeGroups}
           />
         </div>
       )}
