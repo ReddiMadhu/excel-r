@@ -44,11 +44,11 @@ export function parsePivotLayouts(pivotConfiguration) {
 
 export function describePivotLayout(pivot) {
   const parts = [];
-  if (p.dataSource) parts.push(`pulls data from the "${p.dataSource}" sheet`);
-  if (p.rowFields.length) parts.push(`broken down by ${p.rowFields.join(', ')}`);
-  if (p.columnFields.length) parts.push(`columns: ${p.columnFields.join(', ')}`);
-  if (p.valueFields.length) parts.push(`shows ${p.valueFields.join(', ')}`);
-  if (p.filterFields.length) parts.push(`can be filtered by ${p.filterFields.join(', ')}`);
+  if (pivot.dataSource) parts.push(`pulls data from the "${pivot.dataSource}" sheet`);
+  if (pivot.rowFields.length) parts.push(`broken down by ${pivot.rowFields.join(', ')}`);
+  if (pivot.columnFields.length) parts.push(`columns: ${pivot.columnFields.join(', ')}`);
+  if (pivot.valueFields.length) parts.push(`shows ${pivot.valueFields.join(', ')}`);
+  if (pivot.filterFields.length) parts.push(`can be filtered by ${pivot.filterFields.join(', ')}`);
   return parts.length ? parts.join('; ') + '.' : 'Pivot-style summary report.';
 }
 
