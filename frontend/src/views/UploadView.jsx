@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Clock, X, Trash2 } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Clock, X } from 'lucide-react';
 import { api } from '../api/client';
 import PageHeader from '../components/layout/PageHeader';
 
@@ -9,12 +9,6 @@ export default function UploadView() {
   const [isUploading, setIsUploading] = useState(false);
   const [scans, setScans] = useState([]);
   const fileInputRef = useRef(null);
-
-  // Delete All Data state
-  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
-  const [deleteConfirmText, setDeleteConfirmText] = useState('');
-  const [deleteStep, setDeleteStep] = useState('confirm'); // 'confirm' | 'deleting' | 'success' | 'error'
-  const [deleteMessage, setDeleteMessage] = useState('');
 
   const addFiles = useCallback((filesList) => {
     const xlsxFiles = Array.from(filesList).filter(f =>
@@ -53,35 +47,6 @@ export default function UploadView() {
     } finally {
       setIsUploading(false);
     }
-  };
-
-  const handleOpenDeleteModal = () => {
-    setDeleteConfirmText('');
-    setDeleteStep('confirm');
-    setDeleteMessage('');
-    setDeleteModalOpen(true);
-  };
-
-  const handleDeleteAll = async () => {
-    setDeleteStep('deleting');
-    try {
-      const result = await api.deleteAllData();
-      setDeleteMessage(
-        `Deleted ${result.deleted_rows} database records, ${result.json_files_removed} output files, and ${result.scan_dirs_removed} scan directories.`
-      );
-      setDeleteStep('success');
-      setScans([]);
-      setSelectedFiles([]);
-    } catch (err) {
-      console.error('Delete all failed:', err);
-      setDeleteMessage(err.message || 'Failed to delete data. Please try again.');
-      setDeleteStep('error');
-    }
-  };
-
-  const closeDeleteModal = () => {
-    setDeleteModalOpen(false);
-    setDeleteConfirmText('');
   };
 
   return (
@@ -225,145 +190,7 @@ export default function UploadView() {
             </div>
           </div>
         )}
-
-        {/* ── Danger Zone: Delete All Data ───────────────────── */}
-        <div className="danger-zone">
-          <div className="danger-zone-card">
-            <div className="danger-zone-info">
-              <div className="danger-zone-icon">
-                <Trash2 size={20} />
-              </div>
-              <div className="danger-zone-text">
-                <h4>Delete All Data & Start Fresh</h4>
-                <p>
-                  Permanently remove all workbooks, scans, intelligence results, rationalization data, and output files.
-                  This cannot be undone.
-                </p>
-              </div>
-            </div>
-            <button
-              className="btn-danger"
-              onClick={handleOpenDeleteModal}
-              disabled={isUploading}
-            >
-              <Trash2 size={15} />
-              Delete All Data
-            </button>
-          </div>
-        </div>
       </div>
-
-      {/* ── Delete Confirmation Modal ──────────────────────── */}
-      {deleteModalOpen && (
-        <div className="delete-modal-overlay" onClick={closeDeleteModal}>
-          <div className="delete-modal-card" onClick={(e) => e.stopPropagation()}>
-            <button className="delete-modal-close" onClick={closeDeleteModal}>
-              <X size={18} />
-            </button>
-
-            {deleteStep === 'confirm' && (
-              <>
-                <div className="delete-modal-header">
-                  <div className="delete-modal-header-icon">
-                    <Trash2 size={20} />
-                  </div>
-                  <h3>Delete All Data</h3>
-                </div>
-
-                <div className="delete-modal-body">
-                  <p>This action is <strong>permanent and irreversible</strong>. It will delete:</p>
-                  <ul className="warning-list">
-                    <li>All uploaded workbooks and scan history</li>
-                    <li>All extracted sheets, datasources, and columns</li>
-                    <li>All KPI clusters and intelligence results</li>
-                    <li>All rationalization recommendations and risks</li>
-                    <li>All generated output files</li>
-                  </ul>
-
-                  <label className="delete-modal-confirm-label">
-                    Type <strong style={{ color: 'var(--accent-rose)' }}>DELETE</strong> to confirm
-                  </label>
-                  <input
-                    type="text"
-                    className="delete-modal-input"
-                    placeholder="Type DELETE here..."
-                    value={deleteConfirmText}
-                    onChange={(e) => setDeleteConfirmText(e.target.value)}
-                    autoFocus
-                  />
-                </div>
-
-                <div className="delete-modal-footer">
-                  <button className="btn btn-ghost" onClick={closeDeleteModal}>
-                    Cancel
-                  </button>
-                  <button
-                    className="btn-danger-solid"
-                    disabled={deleteConfirmText !== 'DELETE'}
-                    onClick={handleDeleteAll}
-                  >
-                    <Trash2 size={14} />
-                    Delete Everything
-                  </button>
-                </div>
-              </>
-            )}
-
-            {deleteStep === 'deleting' && (
-              <div className="delete-success-message">
-                <div className="delete-spinner" />
-                <div>
-                  <h3 style={{ margin: '0 0 6px 0', fontSize: '1rem' }}>Deleting all data...</h3>
-                  <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0 }}>
-                    Clearing database, output files, and scan directories.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {deleteStep === 'success' && (
-              <div className="delete-success-message">
-                <div className="delete-success-icon">✓</div>
-                <div>
-                  <h3 style={{ margin: '0 0 6px 0', fontSize: '1.1rem', color: 'var(--accent-emerald)' }}>
-                    All Data Deleted
-                  </h3>
-                  <p className="text-secondary" style={{ fontSize: '0.85rem', margin: 0 }}>
-                    {deleteMessage}
-                  </p>
-                </div>
-                <button className="btn btn-primary" onClick={closeDeleteModal} style={{ marginTop: 8 }}>
-                  Done — Upload New Data
-                </button>
-              </div>
-            )}
-
-            {deleteStep === 'error' && (
-              <div className="delete-success-message">
-                <div className="delete-modal-header-icon" style={{ width: 48, height: 48, borderRadius: '50%' }}>
-                  <AlertCircle size={22} />
-                </div>
-                <div>
-                  <h3 style={{ margin: '0 0 6px 0', fontSize: '1.1rem', color: 'var(--accent-rose)' }}>
-                    Delete Failed
-                  </h3>
-                  <p className="text-secondary" style={{ fontSize: '0.85rem', margin: 0 }}>
-                    {deleteMessage}
-                  </p>
-                </div>
-                <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-                  <button className="btn btn-ghost" onClick={closeDeleteModal}>
-                    Close
-                  </button>
-                  <button className="btn-danger-solid" onClick={handleDeleteAll}>
-                    Retry
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
