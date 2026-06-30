@@ -432,6 +432,40 @@ class Database:
                 conn.rollback()
                 raise
 
+    def delete_all_data(self) -> dict:
+        """Delete ALL data from every table. Returns counts of deleted rows."""
+        # Order matters: children before parents (foreign key safe)
+        tables_in_order = [
+            "governance_recommendations",
+            "governance_risks",
+            "kpi_cluster_cache",
+            "calculated_fields",
+            "columns",
+            "worksheets",
+            "table_joins",
+            "tables",
+            "datasources",
+            "dashboards",
+            "workbooks",
+            "scans",
+        ]
+        conn = self._get_connection()
+        counts = {}
+        with self._write_lock:
+            try:
+                for table in tables_in_order:
+                    row = conn.execute(f"SELECT COUNT(*) as cnt FROM {table}").fetchone()
+                    counts[table] = row["cnt"] if row else 0
+                    conn.execute(f"DELETE FROM {table}")
+                # Reset autoincrement counters
+                conn.execute("DELETE FROM sqlite_sequence")
+                conn.commit()
+                logger.info("Deleted all data from %d tables", len(tables_in_order))
+            except Exception:
+                conn.rollback()
+                raise
+        return counts
+
     def close(self):
         """Close the thread-local connection."""
         if hasattr(self._local, "connection") and self._local.connection:

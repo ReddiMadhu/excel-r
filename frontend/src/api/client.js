@@ -84,4 +84,7 @@ export const api = {
     const qs = params.toString();
     return fetchJson(`/api/kpi-graph/summary?${qs}`);
   },
+
+  // Data Management
+  deleteAllData: () => fetchJson('/api/data/all', { method: 'DELETE' }),
 };
