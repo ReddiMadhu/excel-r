@@ -91,5 +91,13 @@ export function useSidebarMetrics() {
 
   useEffect(() => { refetch(); }, [refetch]);
 
+  useEffect(() => {
+    const handleUpdate = () => {
+      refetch();
+    };
+    window.addEventListener('portfolio-updated', handleUpdate);
+    return () => window.removeEventListener('portfolio-updated', handleUpdate);
+  }, [refetch]);
+
   return { metrics, loading, refetch };
 }

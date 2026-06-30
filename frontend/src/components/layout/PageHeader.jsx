@@ -15,12 +15,13 @@ export default function PageHeader({ title, subtitle, leading, actions, classNam
     try {
       await api.deleteAllData();
       setStatus('success');
+      // Instantly dispatch event to clear frontend state in useApi and sidebar
+      window.dispatchEvent(new Event('portfolio-updated'));
       setTimeout(() => {
         setIsOpen(false);
         setStatus('confirm');
         navigate('/upload');
-        window.location.reload();
-      }, 1500);
+      }, 1000);
     } catch (err) {
       console.error(err);
       setErrorMsg(err.message || 'Failed to wipe data.');
