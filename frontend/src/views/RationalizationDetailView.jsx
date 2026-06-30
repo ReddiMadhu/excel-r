@@ -393,6 +393,7 @@ export default function RationalizationDetailView() {
                 workbookIds={type === 'keep' || !rec.merge_with_id ? undefined : graphWorkbookIds}
                 height="550px"
                 legendExcludeGroups={['Report', 'KPI']}
+                hideSharedSources={true}
               />
             </div>
           </div>

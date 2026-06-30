@@ -29,7 +29,6 @@ const LEGEND_ITEMS = [
   { group: 'User Group', label: 'User Group' },
   { group: 'Table', label: 'Table' },
   { group: 'Datasource', label: 'Datasource' },
-  { group: 'Shared Datasource', label: 'Shared Source' },
 ];
 
 const ACTION_COLORS = {
@@ -60,6 +59,7 @@ export function KPIDashboardGraph({
   filterAction = null,
   title = null,
   legendExcludeGroups = [],
+  hideSharedSources = false,
 }) {
   const svgRef = useRef(null);
   const containerRef = useRef(null);
@@ -70,6 +70,7 @@ export function KPIDashboardGraph({
   const [isMaximized, setIsMaximized] = useState(false);
   const [activeHighlight, setActiveHighlight] = useState(null);
   const [presentGroups, setPresentGroups] = useState(new Set());
+  const [presentActions, setPresentActions] = useState(new Set());
   const [clickedNode, setClickedNode] = useState(null);
 
   const nodesRef = useRef([]);
@@ -104,6 +105,7 @@ export function KPIDashboardGraph({
         
         const rawData = await api.getKpiGraphData(graphParams);
         const excludedGroups = new Set(['Line of Business', 'Business Area', 'User Group', 'Granularity Level', 'Upload Age']);
+        if (hideSharedSources) excludedGroups.add('Shared Datasource');
         const filteredNodes = (rawData.nodes || []).filter(n => !excludedGroups.has(n.group));
         const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
         const filteredLinks = (rawData.links || []).filter(l => {
@@ -142,6 +144,9 @@ export function KPIDashboardGraph({
         if (sharedKpiIds.size > 0) legendGroups.add('Shared KPI');
         if (uniqueKpiIds.size > 0) legendGroups.add('Unique KPI');
         setPresentGroups(legendGroups);
+        const actionSet = new Set();
+        data.nodes.forEach(n => { if (n.action) actionSet.add(n.action); });
+        setPresentActions(actionSet);
         drawGraph(data.nodes, data.links);
       } catch (err) {
         console.error('Failed to load KPI graph:', err);
@@ -862,13 +867,6 @@ export function KPIDashboardGraph({
             >
               Shared KPIs
             </button>
-            <button
-              onClick={() => handleHighlightClick('kpi')}
-              className={`btn ${activeHighlight === 'kpi' ? 'btn-primary' : 'btn-ghost'}`}
-              style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-            >
-              KPI Nodes
-            </button>
             {presentGroups.has('Unique KPI') && (
               <button
                 onClick={() => handleHighlightClick('unique-kpi')}
@@ -876,15 +874,6 @@ export function KPIDashboardGraph({
                 style={{ padding: '6px 12px', fontSize: '0.8rem' }}
               >
                 Unique KPIs
-              </button>
-            )}
-            {presentGroups.has('Shared Datasource') && (
-              <button
-                onClick={() => handleHighlightClick('shared-source')}
-                className={`btn ${activeHighlight === 'shared-source' ? 'btn-primary' : 'btn-ghost'}`}
-                style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-              >
-                Shared Sources
               </button>
             )}
           </>
@@ -988,18 +977,24 @@ export function KPIDashboardGraph({
               ))}
               {isRationalization && presentGroups.has('Report') && (
                 <>
-                  <div className="kpi-graph-legend-item">
-                    {getLegendShapeSvg('Report', ACTION_COLORS.keep)}
-                    <span className="kpi-graph-legend-label">Keep</span>
-                  </div>
-                  <div className="kpi-graph-legend-item">
-                    {getLegendShapeSvg('Report', ACTION_COLORS.merge)}
-                    <span className="kpi-graph-legend-label">Merge</span>
-                  </div>
-                  <div className="kpi-graph-legend-item">
-                    {getLegendShapeSvg('Report', ACTION_COLORS.decommission)}
-                    <span className="kpi-graph-legend-label">Decommission</span>
-                  </div>
+                  {presentActions.has('keep') && (
+                    <div className="kpi-graph-legend-item">
+                      {getLegendShapeSvg('Report', ACTION_COLORS.keep)}
+                      <span className="kpi-graph-legend-label">Keep</span>
+                    </div>
+                  )}
+                  {presentActions.has('merge') && (
+                    <div className="kpi-graph-legend-item">
+                      {getLegendShapeSvg('Report', ACTION_COLORS.merge)}
+                      <span className="kpi-graph-legend-label">Merge</span>
+                    </div>
+                  )}
+                  {(presentActions.has('decommission') || presentActions.has('delete')) && (
+                    <div className="kpi-graph-legend-item">
+                      {getLegendShapeSvg('Report', ACTION_COLORS.decommission)}
+                      <span className="kpi-graph-legend-label">Decommission</span>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -1022,6 +1017,7 @@ export function KPIDashboardGraph({
             isMaximizedView={true}
             onMinimize={() => setIsMaximized(false)}
             legendExcludeGroups={legendExcludeGroups}
+            hideSharedSources={hideSharedSources}
           />
         </div>
       )}
