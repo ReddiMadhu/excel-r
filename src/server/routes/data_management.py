@@ -33,6 +33,10 @@ async def delete_all_data():
     2. Removes generated JSON output files
     3. Removes uploaded scan directories
     4. Resets agent orchestrator state
+
+    NOTE: The persistent extraction cache is intentionally PRESERVED
+    so that re-uploading the same files completes in seconds.
+    Use DELETE /api/data/cache to clear the cache separately.
     """
     db = get_database()
 
@@ -70,14 +74,43 @@ async def delete_all_data():
 
     total_rows = sum(counts.values())
     logger.info(
-        "Delete all: %d DB rows, %d JSON files, %d scan dirs removed",
+        "Delete all: %d DB rows, %d JSON files, %d scan dirs removed (cache preserved)",
         total_rows, json_files_removed, scan_dirs_removed,
     )
 
     return {
-        "message": "All data deleted successfully.",
+        "message": "All data deleted successfully. Extraction cache preserved for fast re-upload.",
         "deleted_rows": total_rows,
         "table_counts": counts,
         "json_files_removed": json_files_removed,
         "scan_dirs_removed": scan_dirs_removed,
     }
+
+
+@router.delete("/data/cache")
+async def clear_cache():
+    """
+    Clear the persistent extraction cache.
+
+    Use this for a full reset when you want re-uploads to
+    run the complete extraction pipeline from scratch.
+    """
+    from src.server.services.result_cache import ResultCache
+    cache = ResultCache()
+    files_removed = cache.clear()
+
+    return {
+        "message": f"Extraction cache cleared: {files_removed} file(s) removed.",
+        "files_removed": files_removed,
+    }
+
+
+@router.get("/data/cache/stats")
+async def get_cache_stats():
+    """
+    Return extraction cache statistics: file count and total size.
+    """
+    from src.server.services.result_cache import ResultCache
+    cache = ResultCache()
+    return cache.stats()
+

@@ -56,7 +56,11 @@ class ExtractionService:
         """
         Extract a single workbook and store in both JSON file and DB.
 
-        Returns a result dict: {"status": "extracted"|"skipped"|"error", ...}
+        Uses a persistent result cache keyed by MD5 hash:
+        - Cache HIT  → skip Excel parsing, load cached JSON into DB (~1-2s)
+        - Cache MISS → run full extraction, cache the result for future re-uploads
+
+        Returns a result dict: {"status": "extracted"|"skipped"|"cached"|"error", ...}
         """
         file_name = os.path.basename(file_path)
         timer = PipelineTimer(
@@ -65,20 +69,61 @@ class ExtractionService:
             file_name=file_name,
         )
 
-        # 1. Check skip
+        # 1. Check skip (already in current DB session)
         with timer.step("skip_check"):
             should_skip, existing_id = self.should_skip(file_path)
         if should_skip:
             timer.finish("EXTRACTION_TOTAL_SKIPPED")
             return {"status": "skipped", "file": file_name, "workbook_id": existing_id}
 
+        # 2. Check persistent result cache (survives DELETE /api/data/all)
+        from src.server.services.result_cache import ResultCache
+        cache = ResultCache()
+
+        with timer.step("cache_check"):
+            try:
+                file_hash = workbook_loader.compute_md5(file_path)
+            except Exception:
+                file_hash = None
+
+            cached_json = cache.get(file_hash) if file_hash else None
+
+        if cached_json:
+            try:
+                # Cache HIT — skip entire extraction pipeline, go straight to DB load
+                logger.info("Cache HIT for '%s' (hash=%s) — loading from cache", file_name, file_hash[:12])
+
+                base_name = os.path.splitext(file_name)[0]
+                json_path = os.path.join(self.output_dir, f"{base_name}.json")
+
+                # Write cached JSON to output dir (so other code can find it)
+                with timer.step("write_cached_json"):
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(cached_json, f, indent=2)
+
+                with timer.step("db_load_from_cache"):
+                    workbook_id = db_loader.load_workbook_json(
+                        cached_json, scan_id, self.db, json_output_path=json_path
+                    )
+
+                timer.finish("EXTRACTION_TOTAL_CACHED")
+                return {
+                    "status": "cached",
+                    "file": file_name,
+                    "workbook_id": workbook_id,
+                    "json_path": json_path,
+                }
+
+            except Exception as e:
+                logger.warning("Cache load failed for '%s', falling through to full extraction: %s", file_name, e)
+
         try:
-            # 2. Import and run existing extraction pipeline
+            # 3. Full extraction pipeline (cache MISS or cache load failed)
             from src.core.main import process_single_file
             with timer.step("process_single_file"):
                 warnings = process_single_file(file_path, self.output_dir)
 
-            # 3. Read the JSON output that was just written
+            # 4. Read the JSON output that was just written
             base_name = os.path.splitext(file_name)[0]
             json_path = os.path.join(self.output_dir, f"{base_name}.json")
 
@@ -94,7 +139,12 @@ class ExtractionService:
                 with open(json_path, "r", encoding="utf-8") as f:
                     output_json = json.load(f)
 
-            # 4. Load into DB
+            # 5. Store in persistent cache for future re-uploads
+            with timer.step("cache_store"):
+                if file_hash:
+                    cache.put(file_hash, output_json)
+
+            # 6. Load into DB
             with timer.step("db_load_workbook_json"):
                 workbook_id = db_loader.load_workbook_json(
                     output_json, scan_id, self.db, json_output_path=json_path
@@ -117,3 +167,4 @@ class ExtractionService:
                 "file": file_name,
                 "error": str(e),
             }
+

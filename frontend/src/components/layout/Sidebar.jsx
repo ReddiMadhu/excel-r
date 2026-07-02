@@ -29,6 +29,8 @@ export default function Sidebar() {
   const handleAgentComplete = useCallback(() => {
     refetchMetrics();
     refetchAgentStatus();
+    // Notify all useApi hooks (KpiExplorerView, LandscapeView, etc.) to refetch
+    window.dispatchEvent(new Event('portfolio-updated'));
   }, [refetchMetrics, refetchAgentStatus]);
 
   return (

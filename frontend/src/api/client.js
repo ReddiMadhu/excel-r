@@ -87,4 +87,6 @@ export const api = {
 
   // Data Management
   deleteAllData: () => fetchJson('/api/data/all', { method: 'DELETE' }),
+  clearCache: () => fetchJson('/api/data/cache', { method: 'DELETE' }),
+  getCacheStats: () => fetchJson('/api/data/cache/stats'),
 };
