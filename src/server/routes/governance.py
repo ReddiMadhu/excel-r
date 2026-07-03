@@ -201,11 +201,13 @@ async def list_risks():
 
 class SendEmailRequest(BaseModel):
     email: str
+    subject: Optional[str] = None
+    body: Optional[str] = None
 
 
 @router.post("/send-email")
 async def send_email_to_team(req: SendEmailRequest):
     """Simulate sending the rationalization results email to the governance team."""
-    logger.info("Governance team notified at %s: rationalization results compiled.", req.email)
+    logger.info("Governance team notified at %s: rationalization results compiled. Subject: %s", req.email, req.subject)
     return {"status": "success", "message": f"Governance report has been successfully emailed to {req.email}."}
 

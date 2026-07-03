@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, GitMerge, Trash2, CheckCircle, TrendingUp, Sparkles, Mail, X,
+  ArrowLeft, GitMerge, Trash2, CheckCircle, TrendingUp, Sparkles, Mail, X, FileDown,
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
 import { Loader } from '../components/shared';
@@ -51,40 +52,116 @@ function getWorkbookKpis(wId, fields, clusters) {
   return Array.from(kpiMap.values());
 }
 
+function generateDefaultEmailDraft(rec, type, sourceKpis) {
+  if (!rec) return { to: '', subject: '', body: '' };
+  
+  let to = rec.user_groups && rec.user_groups.length > 0
+    ? `${rec.user_groups[0].toLowerCase().replace(/[^a-z0-9]/g, '-')}@company.com`
+    : 'stakeholders@company.com';
+  
+  let subject = '';
+  let body = '';
+
+  const reasonsList = cleanReasons(rec.reasons)
+    .map(r => `- ${r}`)
+    .join('\n');
+  const audienceList = rec.user_groups && rec.user_groups.length > 0
+    ? rec.user_groups.map(g => `- ${g}`).join('\n')
+    : '- General Stakeholders';
+  const kpisList = sourceKpis && sourceKpis.length > 0
+    ? sourceKpis.map(k => `- ${k}`).join('\n')
+    : '- No registered KPIs';
+  const datasourcesList = rec.tables && rec.tables.length > 0
+    ? rec.tables.map(t => `- ${t}`).join('\n')
+    : '- No direct database lineage references';
+
+  if (type === 'merge') {
+    subject = `[Governance Action Required] Consolidation & Merge Recommendation: ${rec.workbook_name}`;
+    body = `Hello Stakeholders,
+
+We have analyzed the BI reporting landscape and identified significant metric and layout overlap. We recommend merging the report "${rec.workbook_name}" into "${rec.merge_with_name || 'the target certified report'}".
+
+Recommended Action: Consolidate and merge into ${rec.merge_with_name || 'Target Certified Report'}
+
+Governance Rationale:
+${reasonsList || '- Redundant metric definitions and database queries.'}
+
+Affected Audience Groups:
+${audienceList}
+
+Mapped KPIs:
+${kpisList}
+
+Source Database Lineage:
+${datasourcesList}
+
+Please review these details. If you have any questions or require an extension before decommissioning, please let the BI Governance Team know.
+
+Best regards,
+BI Governance Team`;
+  } else if (type === 'decommission') {
+    subject = `[Governance Action Required] Decommission & Archive Notification: ${rec.workbook_name}`;
+    body = `Hello Stakeholders,
+
+This is a formal notification that the report "${rec.workbook_name}" has been flagged for decommissioning due to platform cleanliness violations and low utilization.
+
+Recommended Action: Archive and Decommission Report
+
+Governance Rationale & Cleanliness Violations:
+${reasonsList || '- Zero active views in the past 90 days.'}
+
+Affected Audience Groups:
+${audienceList}
+
+Mapped KPIs:
+${kpisList}
+
+Source Database Lineage:
+${datasourcesList}
+
+After decommissioning, this report metadata will be archived and database connection endpoints severed. Please save any necessary custom layouts immediately.
+
+Best regards,
+BI Governance Team`;
+  } else {
+    subject = `[Governance Certification] Certification Keep Status: ${rec.workbook_name}`;
+    body = `Hello Stakeholders,
+
+We have audited the report "${rec.workbook_name}" and confirmed its status as a Certified Keep report.
+
+Recommended Action: Certify and Keep Active
+
+Governance Rationale:
+${reasonsList || '- High uniqueness and active stakeholder utilization.'}
+
+Affected Audience Groups:
+${audienceList}
+
+Mapped KPIs:
+${kpisList}
+
+Source Database Lineage:
+${datasourcesList}
+
+Thank you for maintaining high-quality dashboard standards.
+
+Best regards,
+BI Governance Team`;
+  }
+
+  return { to, subject, body };
+}
+
 export default function RationalizationDetailView() {
   const { type, id } = useParams();
   const navigate = useNavigate();
   const workbookId = parseInt(id, 10);
 
-  // Email Modal states
+  // Email Modal & Draft states
   const [emailModalOpen, setEmailModalOpen] = useState(false);
-  const [emailInput, setEmailInput] = useState('governance-team@company.com');
+  const [emailDraft, setEmailDraft] = useState({ to: '', subject: '', body: '' });
   const [emailStep, setEmailStep] = useState('input'); // 'input' | 'sending' | 'success' | 'error'
   const [emailMessage, setEmailMessage] = useState('');
-
-  const handleOpenEmailModal = () => {
-    setEmailStep('input');
-    setEmailMessage('');
-    setEmailModalOpen(true);
-  };
-
-  const handleSendEmail = async (e) => {
-    if (e) e.preventDefault();
-    if (!emailInput || !emailInput.includes('@')) {
-      alert('Please enter a valid email address.');
-      return;
-    }
-    setEmailStep('sending');
-    try {
-      const res = await api.sendEmailToTeam({ email: emailInput });
-      setEmailMessage(res.message || `Governance report successfully emailed to ${emailInput}.`);
-      setEmailStep('success');
-    } catch (err) {
-      console.error(err);
-      setEmailMessage(err.message || 'Failed to dispatch governance email.');
-      setEmailStep('error');
-    }
-  };
 
   const { data: recs, loading: recsLoading } = useApi(api.getRecommendations);
   const { data: allCalculatedFields, loading: fieldsLoading } = useApi(api.getCalculatedFields);
@@ -177,6 +254,241 @@ export default function RationalizationDetailView() {
   }
 
   const reasons = cleanReasons(rec.reasons);
+
+  const downloadRationalisationPDF = () => {
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    const pageHeight = 297;
+    const pageWidth = 210;
+    const marginX = 20;
+    const contentWidth = pageWidth - (marginX * 2); // 170 mm
+    let y = 20;
+
+    // Helper to check page bounds and auto-add new page
+    const checkPageBreak = (neededHeight) => {
+      if (y + neededHeight > pageHeight - 20) {
+        doc.addPage();
+        y = 20;
+        // Draw minimal header on subsequent pages
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(150, 150, 150);
+        doc.text(`BI Governance Report: ${rec.workbook_name}`, marginX, 10);
+        doc.line(marginX, 12, pageWidth - marginX, 12);
+        y = 20;
+      }
+    };
+
+    // Helper to add wrapped paragraph text
+    const addParagraph = (text, fontSize = 10, isBold = false, color = [51, 65, 85]) => {
+      doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+      doc.setFontSize(fontSize);
+      doc.setTextColor(color[0], color[1], color[2]);
+      
+      const lines = doc.splitTextToSize(text, contentWidth);
+      const lineHeight = fontSize * 0.45; // mm per line approx
+      
+      lines.forEach(line => {
+        checkPageBreak(lineHeight);
+        doc.text(line, marginX, y);
+        y += lineHeight;
+      });
+      y += 2; // small space after paragraph
+    };
+
+    // 1. Draw Title Banner on first page
+    doc.setFillColor(30, 41, 59); // Slate-800
+    doc.rect(0, 0, pageWidth, 40, 'F');
+
+    // Title Text
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.setTextColor(255, 255, 255);
+    doc.text('BI Governance & Rationalization Report', marginX, 18);
+
+    // Subtitle
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(226, 232, 240); // Slate-200
+    const dateStr = new Date().toLocaleDateString('en-US', {
+      year: 'numeric', month: 'long', day: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    });
+    doc.text(`Generated on ${dateStr} | System: Antigravity Governance Engine`, marginX, 26);
+
+    // Reset colors and starting Y position
+    y = 52;
+
+    // Report Identification Card
+    checkPageBreak(25);
+    doc.setFillColor(248, 250, 252); // Slate-50 background for card
+    doc.setDrawColor(226, 232, 240); // Slate-200 border
+    doc.rect(marginX, y, contentWidth, 24, 'FD');
+    
+    // Card Text
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(30, 41, 59);
+    doc.text(`Report name: ${rec.workbook_name}`, marginX + 6, y + 8);
+    
+    // Status action color
+    let actionText = '';
+    let actionColor = [100, 116, 139]; // Default grey
+    if (type === 'merge') {
+      actionText = `CONSOLIDATION MERGE (Merge into: ${rec.merge_with_name || 'Target Report'})`;
+      actionColor = [217, 119, 6]; // Amber-600
+    } else if (type === 'decommission') {
+      actionText = 'DECOMMISSION / ARCHIVE';
+      actionColor = [225, 29, 72]; // Rose-600
+    } else {
+      actionText = 'CERTIFIED KEEP';
+      actionColor = [5, 150, 105]; // Emerald-600
+    }
+    
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(actionColor[0], actionColor[1], actionColor[2]);
+    doc.text(`Recommended Action: ${actionText}`, marginX + 6, y + 16);
+
+    y += 32;
+
+    // 2. Section: Executive Justification
+    if (rec.llm_justification) {
+      checkPageBreak(15);
+      addParagraph('Executive Justification', 12, true, [15, 23, 42]);
+      doc.setDrawColor(226, 232, 240);
+      doc.line(marginX, y - 1, pageWidth - marginX, y - 1);
+      y += 3;
+      addParagraph(rec.llm_justification, 10, false, [51, 65, 85]);
+      y += 4;
+    }
+
+    // 3. Section: Governance Rationale & Cleanliness Violations
+    const cleanReasonsList = cleanReasons(rec.reasons);
+    if (cleanReasonsList.length > 0) {
+      checkPageBreak(15);
+      const titleText = type === 'decommission' ? 'Cleanliness Violations' : 'Governance Rationale';
+      addParagraph(titleText, 12, true, [15, 23, 42]);
+      doc.setDrawColor(226, 232, 240);
+      doc.line(marginX, y - 1, pageWidth - marginX, y - 1);
+      y += 3;
+
+      cleanReasonsList.forEach(reason => {
+        // Draw bullet
+        checkPageBreak(8);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(actionColor[0], actionColor[1], actionColor[2]);
+        doc.text('•', marginX + 2, y);
+        
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.setTextColor(51, 65, 85);
+        // Offset text slightly to not overlap bullet
+        const lines = doc.splitTextToSize(reason, contentWidth - 8);
+        const lineHeight = 10 * 0.45;
+        lines.forEach((line, index) => {
+          if (index > 0) checkPageBreak(lineHeight);
+          doc.text(line, marginX + 6, y);
+          if (index < lines.length - 1) y += lineHeight;
+        });
+        y += lineHeight + 2;
+      });
+      y += 2;
+    }
+
+    // 4. Section: Affected Audience Groups
+    checkPageBreak(15);
+    addParagraph('Affected Audience & Stakeholders', 12, true, [15, 23, 42]);
+    doc.setDrawColor(226, 232, 240);
+    doc.line(marginX, y - 1, pageWidth - marginX, y - 1);
+    y += 3;
+
+    const audienceGroups = rec.user_groups && rec.user_groups.length > 0 
+      ? rec.user_groups.join(', ') 
+      : 'No specific audience groups registered.';
+    addParagraph(`Stakeholder Groups: ${audienceGroups}`, 10, false, [51, 65, 85]);
+    y += 4;
+
+    // 5. Section: KPI Catalog overlap
+    checkPageBreak(15);
+    addParagraph('Mapped Key Performance Indicators (KPIs)', 12, true, [15, 23, 42]);
+    doc.setDrawColor(226, 232, 240);
+    doc.line(marginX, y - 1, pageWidth - marginX, y - 1);
+    y += 3;
+
+    if (sourceKpis.length > 0) {
+      const kpiText = sourceKpis.join(', ');
+      addParagraph(`Total Mapped KPIs: ${sourceKpis.length}`, 10, true, [30, 41, 59]);
+      addParagraph(kpiText, 9, false, [71, 85, 105]);
+    } else {
+      addParagraph('No registered KPIs detected for this report.', 10, false, [100, 116, 139]);
+    }
+    y += 4;
+
+    // 6. Section: Database Lineage & Schema Connections
+    checkPageBreak(15);
+    addParagraph('Database Lineage & Source Schema Connections', 12, true, [15, 23, 42]);
+    doc.setDrawColor(226, 232, 240);
+    doc.line(marginX, y - 1, pageWidth - marginX, y - 1);
+    y += 3;
+
+    const sourceTablesList = rec.tables || [];
+    if (sourceTablesList.length > 0) {
+      addParagraph(`Referenced Data Tables: ${sourceTablesList.length}`, 10, true, [30, 41, 59]);
+      addParagraph(sourceTablesList.join(', '), 9, false, [71, 85, 105]);
+    } else {
+      addParagraph('No direct database lineage references detected.', 10, false, [100, 116, 139]);
+    }
+
+    // Footer on final page (and page numbers on all)
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184); // slate-400
+      doc.text(`Page ${i} of ${pageCount}`, pageWidth - marginX - 15, pageHeight - 10);
+      doc.text('CONFIDENTIAL - FOR INTERNAL BI GOVERNANCE USE ONLY', marginX, pageHeight - 10);
+    }
+
+    // Trigger download
+    const cleanName = rec.workbook_name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    doc.save(`governance_report_${cleanName}.pdf`);
+  };
+
+  const handleOpenEmailModal = () => {
+    const draft = generateDefaultEmailDraft(rec, type, sourceKpis);
+    setEmailDraft(draft);
+    setEmailStep('input');
+    setEmailMessage('');
+    setEmailModalOpen(true);
+  };
+
+  const handleSendEmail = async (e) => {
+    if (e) e.preventDefault();
+    if (!emailDraft.to || !emailDraft.to.includes('@')) {
+      alert('Please enter a valid email address.');
+      return;
+    }
+    setEmailStep('sending');
+    try {
+      const res = await api.sendEmailToTeam({
+        email: emailDraft.to,
+        subject: emailDraft.subject,
+        body: emailDraft.body
+      });
+      setEmailMessage(res.message || `Governance notification successfully emailed to ${emailDraft.to}.`);
+      setEmailStep('success');
+    } catch (err) {
+      console.error(err);
+      setEmailMessage(err.message || 'Failed to dispatch governance email.');
+      setEmailStep('error');
+    }
+  };
 
   // Per-workbook containment scores: what % of THIS workbook's KPIs exist in the other
   const sourceTotalKpis = sourceKpis.length;
@@ -287,22 +599,41 @@ export default function RationalizationDetailView() {
             <p className="review-detail-subtitle">{config.subtitle}</p>
           </div>
         </div>
-        <button
-          onClick={handleOpenEmailModal}
-          className="btn btn-primary"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: '0.85rem',
-            padding: '6px 12px',
-            cursor: 'pointer'
-          }}
-          title="Send rationalization results to governance team via email"
-        >
-          <Mail size={15} />
-          Send Email to Team
-        </button>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            onClick={downloadRationalisationPDF}
+            className="btn btn-ghost"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: '0.85rem',
+              padding: '6px 12px',
+              cursor: 'pointer',
+              border: '1px solid var(--glass-border)'
+            }}
+            title="Download PDF Report"
+          >
+            <FileDown size={15} />
+            Download PDF Report
+          </button>
+          <button
+            onClick={handleOpenEmailModal}
+            className="btn btn-primary"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: '0.85rem',
+              padding: '6px 12px',
+              cursor: 'pointer'
+            }}
+            title="Send notification email to stakeholders"
+          >
+            <Mail size={15} />
+            Email Stakeholders
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -575,38 +906,66 @@ export default function RationalizationDetailView() {
       {/* Email dispatch Modal */}
       {emailModalOpen && (
         <div className="email-modal-backdrop" onClick={() => setEmailModalOpen(false)}>
-          <div className="email-modal-card" onClick={(e) => e.stopPropagation()}>
+          <div className="email-modal-card" style={{ maxWidth: '640px', width: '90%' }} onClick={(e) => e.stopPropagation()}>
             <button className="email-modal-close" onClick={() => setEmailModalOpen(false)}>
               <X size={18} />
             </button>
             
             {emailStep === 'input' && (
-              <form onSubmit={handleSendEmail} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--accent-blue)', marginBottom: 4 }}>
+              <form onSubmit={handleSendEmail} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--accent-blue)', marginBottom: 2 }}>
                   <Mail size={22} />
-                  <h3 style={{ margin: 0, fontSize: '1.15rem' }}>Send Governance Report</h3>
+                  <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 600 }}>Review Email Draft</h3>
                 </div>
                 <p className="text-secondary" style={{ fontSize: '0.85rem', margin: 0 }}>
-                  Send the compiled BI rationalization and redundancy report directly to the team via email.
+                  Review and customize the notification subject and body before sending it to stakeholders.
                 </p>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>TEAM EMAIL ADDRESS</label>
+                
+                {/* To Recipient */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>RECIPIENT EMAIL</label>
                   <input
                     type="email"
                     required
                     className="email-modal-input"
-                    placeholder="e.g. governance-team@company.com"
-                    value={emailInput}
-                    onChange={(e) => setEmailInput(e.target.value)}
-                    autoFocus
+                    placeholder="e.g. stakeholders@company.com"
+                    value={emailDraft.to}
+                    onChange={(e) => setEmailDraft({ ...emailDraft, to: e.target.value })}
                   />
                 </div>
+
+                {/* Subject */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>SUBJECT</label>
+                  <input
+                    type="text"
+                    required
+                    className="email-modal-input"
+                    placeholder="Email Subject"
+                    value={emailDraft.subject}
+                    onChange={(e) => setEmailDraft({ ...emailDraft, subject: e.target.value })}
+                  />
+                </div>
+
+                {/* Body */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>EMAIL BODY</label>
+                  <textarea
+                    required
+                    className="email-modal-input"
+                    style={{ minHeight: '220px', fontFamily: 'monospace', fontSize: '0.85rem', lineHeight: '1.4', resize: 'vertical' }}
+                    placeholder="Type email body here..."
+                    value={emailDraft.body}
+                    onChange={(e) => setEmailDraft({ ...emailDraft, body: e.target.value })}
+                  />
+                </div>
+
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
                   <button type="button" className="btn btn-ghost" onClick={() => setEmailModalOpen(false)}>
                     Cancel
                   </button>
                   <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    Send Report
+                    Send Notification
                   </button>
                 </div>
               </form>
@@ -617,7 +976,7 @@ export default function RationalizationDetailView() {
                 <div className="email-modal-spinner" />
                 <div style={{ textAlign: 'center' }}>
                   <h3 style={{ margin: '0 0 6px 0', fontSize: '1rem' }}>Dispatching Report</h3>
-                  <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0 }}>Compiling overlap models and sending to {emailInput}...</p>
+                  <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0 }}>Compiling overlap models and sending to {emailDraft.to}...</p>
                 </div>
               </div>
             )}
