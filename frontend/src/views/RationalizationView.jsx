@@ -624,19 +624,67 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
   const primaryDsCoverage = primaryDsCount > 0 ? Math.round((sharedDsCount / primaryDsCount) * 100) : Math.round((primary.datasource_overlap_score || 0) * 100);
   const partnerDsCoverage = partnerDsCount > 0 ? Math.round((sharedDsCount / partnerDsCount) * 100) : Math.round((partner?.datasource_overlap_score || primary.datasource_overlap_score || 0) * 100);
 
+  // Intelligence to determine consolidation destination (Target) vs merge candidate (Source)
+  const isPrimaryConsolidationTarget = useMemo(() => {
+    if (!partner) return true;
+    
+    // 1. Compare KPI count
+    const primaryKpis = commonKpis.length + uniqueToPrimary.length;
+    const partnerKpis = commonKpis.length + uniqueToPartner.length;
+    if (primaryKpis !== partnerKpis) {
+      return primaryKpis > partnerKpis;
+    }
+    
+    // 2. Compare Data Source counts
+    const primaryDs = primary.ds_sources_count || 0;
+    const partnerDs = partner.ds_sources_count || 0;
+    if (primaryDs !== partnerDs) {
+      return primaryDs > partnerDs;
+    }
+    
+    // 3. Compare Quality Score
+    const primaryQuality = primary.scores?.extraction_quality_score || 0;
+    const partnerQuality = partner.scores?.extraction_quality_score || 0;
+    if (primaryQuality !== partnerQuality) {
+      return primaryQuality > partnerQuality;
+    }
+    
+    return primary.workbook_id < partner.workbook_id;
+  }, [primary, partner, commonKpis, uniqueToPrimary, uniqueToPartner]);
+
+  const swapColumns = !!partner && isPrimaryConsolidationTarget;
+
+  const leftWbName = swapColumns ? partnerName : primary.workbook_name;
+  const rightWbName = swapColumns ? primary.workbook_name : partnerName;
+
+  const leftKpiCoverage = swapColumns ? partnerKpiCoverage : primaryKpiCoverage;
+  const rightKpiCoverage = swapColumns ? primaryKpiCoverage : partnerKpiCoverage;
+
+  const leftDsCoverage = swapColumns ? partnerDsCoverage : primaryDsCoverage;
+  const rightDsCoverage = swapColumns ? primaryDsCoverage : partnerDsCoverage;
+
+  const leftUniquePct = swapColumns ? partnerUniquePct : primaryUniquePct;
+  const rightUniquePct = swapColumns ? primaryUniquePct : partnerUniquePct;
+
+  const leftOnReview = swapColumns ? onReviewPartner : onReviewPrimary;
+  const rightOnReview = swapColumns ? onReviewPrimary : onReviewPartner;
+
+  const leftUniqueKpis = swapColumns ? uniqueToPartner : uniqueToPrimary;
+  const rightUniqueKpis = swapColumns ? uniqueToPrimary : uniqueToPartner;
+
   return (
     <div className="rec-card merge">
       {/* Header — both workbooks with merge icon */}
       <div className="rec-card-top" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', flexWrap: 'wrap' }}>
-          <div className="rec-card-name" style={{ flex: 1 }}>{primary.workbook_name}</div>
+          <div className="rec-card-name" style={{ flex: 1 }}>{leftWbName}</div>
           <span style={{
             display: 'flex', alignItems: 'center',
             color: 'var(--accent-amber)', fontWeight: 700, flexShrink: 0,
           }}>
             <GitMerge size={15} />
           </span>
-          <div className="rec-card-name" style={{ flex: 1 }}>{partnerName}</div>
+          <div className="rec-card-name" style={{ flex: 1 }}>{rightWbName}</div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <span className="badge badge-amber" style={{ fontSize: '0.68rem' }}>Merge Group</span>
@@ -652,36 +700,36 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
       {/* Overlap Scores — per-workbook containment, side by side */}
       <div className="rec-card-scores" style={{ flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', gap: 12, fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-          <span style={{ flex: 1 }}>{primary.workbook_name}</span>
-          <span style={{ flex: 1 }}>{partnerName}</span>
+          <span style={{ flex: 1 }}>{leftWbName}</span>
+          <span style={{ flex: 1 }}>{rightWbName}</span>
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
           <div style={{ flex: 1 }}>
             <div className="rec-score-item">
               <span className="rec-score-label">KPIs Covered:</span>
-              <span className="rec-score-value" style={{ color: scoreColor(primaryKpiCoverage, false) }}>{primaryKpiCoverage}%</span>
+              <span className="rec-score-value" style={{ color: scoreColor(leftKpiCoverage, false) }}>{leftKpiCoverage}%</span>
             </div>
             <div className="rec-score-item">
               <span className="rec-score-label">DS Columns:</span>
-              <span className="rec-score-value" style={{ color: scoreColor(primaryDsCoverage, false) }}>{primaryDsCoverage}%</span>
+              <span className="rec-score-value" style={{ color: scoreColor(leftDsCoverage, false) }}>{leftDsCoverage}%</span>
             </div>
             <div className="rec-score-item">
               <span className="rec-score-label">Unique:</span>
-              <span className="rec-score-value" style={{ color: scoreColor(primaryUniquePct, true) }}>{primaryUniquePct}%</span>
+              <span className="rec-score-value" style={{ color: scoreColor(leftUniquePct, true) }}>{leftUniquePct}%</span>
             </div>
           </div>
           <div style={{ flex: 1 }}>
             <div className="rec-score-item">
               <span className="rec-score-label">KPIs Covered:</span>
-              <span className="rec-score-value" style={{ color: scoreColor(partnerKpiCoverage, false) }}>{partnerKpiCoverage}%</span>
+              <span className="rec-score-value" style={{ color: scoreColor(rightKpiCoverage, false) }}>{rightKpiCoverage}%</span>
             </div>
             <div className="rec-score-item">
               <span className="rec-score-label">DS Columns:</span>
-              <span className="rec-score-value" style={{ color: scoreColor(partnerDsCoverage, false) }}>{partnerDsCoverage}%</span>
+              <span className="rec-score-value" style={{ color: scoreColor(rightDsCoverage, false) }}>{rightDsCoverage}%</span>
             </div>
             <div className="rec-score-item">
               <span className="rec-score-label">Unique:</span>
-              <span className="rec-score-value" style={{ color: scoreColor(partnerUniquePct, true) }}>{partnerUniquePct}%</span>
+              <span className="rec-score-value" style={{ color: scoreColor(rightUniquePct, true) }}>{rightUniquePct}%</span>
             </div>
           </div>
         </div>
@@ -747,15 +795,15 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
                 </div>
               )}
 
-              {/* Unique to primary */}
-              {uniqueToPrimary.length > 0 && (
+              {/* Unique to merge candidate (left) */}
+              {leftUniqueKpis.length > 0 && (
                 <div>
                   <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    Only in {primary.workbook_name} ({uniqueToPrimary.length})
+                    Only in {leftWbName} ({leftUniqueKpis.length})
                   </div>
                   <div className="rec-card-kpis-tags">
-                    {uniqueToPrimary.map((k, i) => (
-                      <span key={i} className="rec-kpi-tag" style={{ background: 'rgba(59,130,246,0.1)', color: 'var(--accent-blue)' }} title={`Unique to ${primary.workbook_name}`}>
+                    {leftUniqueKpis.map((k, i) => (
+                      <span key={i} className="rec-kpi-tag" style={{ background: 'rgba(59,130,246,0.1)', color: 'var(--accent-blue)' }} title={`Unique to ${leftWbName}`}>
                         {k}
                       </span>
                     ))}
@@ -763,15 +811,15 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
                 </div>
               )}
 
-              {/* Unique to partner */}
-              {uniqueToPartner.length > 0 && (
+              {/* Unique to consolidation target (right) */}
+              {rightUniqueKpis.length > 0 && (
                 <div>
                   <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    Only in {partnerName} ({uniqueToPartner.length})
+                    Only in {rightWbName} ({rightUniqueKpis.length})
                   </div>
                   <div className="rec-card-kpis-tags">
-                    {uniqueToPartner.map((k, i) => (
-                      <span key={i} className="rec-kpi-tag" style={{ background: 'rgba(139,92,246,0.1)', color: 'var(--accent-purple)' }} title={`Unique to ${partnerName}`}>
+                    {rightUniqueKpis.map((k, i) => (
+                      <span key={i} className="rec-kpi-tag" style={{ background: 'rgba(139,92,246,0.1)', color: 'var(--accent-purple)' }} title={`Unique to ${rightWbName}`}>
                         {k}
                       </span>
                     ))}
@@ -786,12 +834,12 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
       {/* Footer — review buttons for each workbook */}
       <div className="rec-card-footer" style={{ gap: 6, flexWrap: 'wrap' }}>
         <div style={{ flex: 1 }} />
-        <button className="btn-review merge" onClick={onReviewPrimary} style={{ fontSize: '0.72rem' }}>
-          {primary.workbook_name} <ArrowRight size={11} />
+        <button className="btn-review merge" onClick={leftOnReview} style={{ fontSize: '0.72rem' }}>
+          Review {leftWbName}
         </button>
-        {onReviewPartner && (
-          <button className="btn-review merge" onClick={onReviewPartner} style={{ fontSize: '0.72rem' }}>
-            {partner?.workbook_name} <ArrowRight size={11} />
+        {rightOnReview && (
+          <button className="btn-review merge" onClick={rightOnReview} style={{ fontSize: '0.72rem' }}>
+            Review {rightWbName}
           </button>
         )}
       </div>

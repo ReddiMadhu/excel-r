@@ -37,9 +37,10 @@ def _pj(val):
 @router.get("/recommendations", response_model=List[GovernanceRecommendation])
 async def list_recommendations():
     """List all workbook rationalization recommendations."""
+    from datetime import datetime
     db = get_database()
     rows = db.query("""
-        SELECT gr.*, w.name AS workbook_name,
+        SELECT gr.*, w.name AS workbook_name, w.uploaded_at, w.sheet_names,
                w.extraction_complexity, w.structural_risk, w.computation_depth,
                w.extraction_quality_score, w.comparison_mode
         FROM governance_recommendations gr
@@ -56,6 +57,38 @@ async def list_recommendations():
             "extraction_quality_score": r.get("extraction_quality_score"),
             "comparison_mode": r.get("comparison_mode"),
         }
+
+        # Calculate days_ago
+        uploaded_at_str = r.get("uploaded_at")
+        days_ago = 15
+        if uploaded_at_str:
+            try:
+                uploaded_at_str_clean = uploaded_at_str.replace("T", " ").split(".")[0]
+                uploaded_dt = datetime.strptime(uploaded_at_str_clean, "%Y-%m-%d %H:%M:%S")
+                days_ago = max(1, (datetime.utcnow() - uploaded_dt).days)
+            except Exception as e:
+                logger.error(f"Error parsing uploaded_at {uploaded_at_str}: {e}")
+
+        # Resolve user_groups for this workbook
+        db_user_groups = db.query("SELECT DISTINCT user_groups FROM dashboards WHERE workbook_id = ?", (r["workbook_id"],))
+        user_groups_set = set()
+        for ug_row in db_user_groups:
+            try:
+                groups = json.loads(ug_row["user_groups"] or "[]")
+                for g in groups:
+                    if g:
+                        user_groups_set.add(g)
+            except Exception:
+                pass
+        user_groups = sorted(list(user_groups_set))
+
+        # Resolve KPIs (distinct calculated fields)
+        db_kpis = db.query("SELECT DISTINCT name FROM calculated_fields WHERE workbook_id = ?", (r["workbook_id"],))
+        kpis = sorted([k["name"] for k in db_kpis if k["name"]])
+
+        # Resolve Tables (distinct datasources)
+        db_tables = db.query("SELECT DISTINCT name FROM datasources WHERE workbook_id = ?", (r["workbook_id"],))
+        tables = sorted([t["name"] for t in db_tables if t["name"]])
 
         results.append(GovernanceRecommendation(
             id=r["id"],
@@ -77,6 +110,12 @@ async def list_recommendations():
             llm_override=bool(r.get("llm_override", 0)),
             scores=scores,
             calculated_at=r.get("calculated_at"),
+            sheet_names=_pj(r.get("sheet_names")),
+            user_groups=user_groups,
+            kpis=kpis,
+            tables=tables,
+            days_ago=days_ago,
+            uploaded_at=uploaded_at_str,
         ))
 
     return results

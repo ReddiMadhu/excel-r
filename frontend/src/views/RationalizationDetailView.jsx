@@ -1,7 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, GitMerge, Trash2, CheckCircle, TrendingUp, Sparkles,
+  ArrowLeft, GitMerge, Trash2, CheckCircle, TrendingUp, Sparkles, Mail, X,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { useApi } from '../hooks/useApi';
@@ -56,6 +56,36 @@ export default function RationalizationDetailView() {
   const navigate = useNavigate();
   const workbookId = parseInt(id, 10);
 
+  // Email Modal states
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [emailInput, setEmailInput] = useState('governance-team@company.com');
+  const [emailStep, setEmailStep] = useState('input'); // 'input' | 'sending' | 'success' | 'error'
+  const [emailMessage, setEmailMessage] = useState('');
+
+  const handleOpenEmailModal = () => {
+    setEmailStep('input');
+    setEmailMessage('');
+    setEmailModalOpen(true);
+  };
+
+  const handleSendEmail = async (e) => {
+    if (e) e.preventDefault();
+    if (!emailInput || !emailInput.includes('@')) {
+      alert('Please enter a valid email address.');
+      return;
+    }
+    setEmailStep('sending');
+    try {
+      const res = await api.sendEmailToTeam({ email: emailInput });
+      setEmailMessage(res.message || `Governance report successfully emailed to ${emailInput}.`);
+      setEmailStep('success');
+    } catch (err) {
+      console.error(err);
+      setEmailMessage(err.message || 'Failed to dispatch governance email.');
+      setEmailStep('error');
+    }
+  };
+
   const { data: recs, loading: recsLoading } = useApi(api.getRecommendations);
   const { data: allCalculatedFields, loading: fieldsLoading } = useApi(api.getCalculatedFields);
   const { data: allClusters, loading: clustersLoading } = useApi(api.getKpiClusters);
@@ -108,6 +138,29 @@ export default function RationalizationDetailView() {
     };
   }, [sourceKpis, targetKpis]);
 
+  // Intelligence to determine consolidation destination (Target) vs merge candidate (Source)
+  const isRecConsolidationTarget = useMemo(() => {
+    if (!target) return true;
+    const recKpis = sourceKpis.length;
+    const targetKpisLen = targetKpis.length;
+    if (recKpis !== targetKpisLen) {
+      return recKpis > targetKpisLen;
+    }
+    // 2. Compare Data Source counts
+    const recDs = rec.ds_sources_count || 0;
+    const targetDs = target.ds_sources_count || 0;
+    if (recDs !== targetDs) {
+      return recDs > targetDs;
+    }
+    // 3. Compare Quality Score
+    const recQuality = rec.scores?.extraction_quality_score || 0;
+    const targetQuality = target.scores?.extraction_quality_score || 0;
+    if (recQuality !== targetQuality) {
+      return recQuality > targetQuality;
+    }
+    return rec.workbook_id < target.workbook_id;
+  }, [rec, target, sourceKpis, targetKpis]);
+
   if (loading) return <Loader />;
 
   if (!rec) {
@@ -158,6 +211,37 @@ export default function RationalizationDetailView() {
 
 
 
+  const swapColumns = type === 'merge' && !!target && isRecConsolidationTarget;
+
+  const leftRec = swapColumns ? target : rec;
+  const rightRec = swapColumns ? rec : target;
+
+  const leftKpis = swapColumns ? targetKpis : sourceKpis;
+  const rightKpis = swapColumns ? sourceKpis : targetKpis;
+
+  const leftTotalKpis = leftKpis.length;
+  const rightTotalKpis = rightKpis.length;
+
+  const leftOnlyKpis = swapColumns ? targetOnlyKpis : sourceOnlyKpis;
+  const rightOnlyKpis = swapColumns ? sourceOnlyKpis : targetOnlyKpis;
+
+  const leftUniquePct = swapColumns ? targetUniquePct : sourceUniquePct;
+  const rightUniquePct = swapColumns ? sourceUniquePct : targetUniquePct;
+
+  const leftDsCount = swapColumns ? targetDsCount : sourceDsCount;
+  const rightDsCount = swapColumns ? sourceDsCount : targetDsCount;
+
+  const leftDsCoverage = swapColumns ? targetDsCoverage : sourceDsCoverage;
+  const rightDsCoverage = swapColumns ? sourceDsCoverage : targetDsCoverage;
+
+  const leftKpiCoverage = swapColumns ? targetKpiCoverage : sourceKpiCoverage;
+  const rightKpiCoverage = swapColumns ? sourceKpiCoverage : targetKpiCoverage;
+
+  const leftReasons = swapColumns ? (rightRec ? cleanReasons(rightRec.reasons) : []) : reasons;
+  const rightReasons = swapColumns ? reasons : (rightRec ? cleanReasons(rightRec.reasons) : []);
+
+
+
   const typeConfig = {
     merge: {
       icon: GitMerge,
@@ -203,6 +287,22 @@ export default function RationalizationDetailView() {
             <p className="review-detail-subtitle">{config.subtitle}</p>
           </div>
         </div>
+        <button
+          onClick={handleOpenEmailModal}
+          className="btn btn-primary"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: '0.85rem',
+            padding: '6px 12px',
+            cursor: 'pointer'
+          }}
+          title="Send rationalization results to governance team via email"
+        >
+          <Mail size={15} />
+          Send Email to Team
+        </button>
       </div>
 
       {/* Content */}
@@ -217,56 +317,56 @@ export default function RationalizationDetailView() {
                  type === 'decommission' ? 'Decommission Candidate' :
                  'Certified Report'}
               </span>
-              <h2 className="review-detail-col-name">{rec.workbook_name}</h2>
+              <h2 className="review-detail-col-name">{leftRec.workbook_name}</h2>
             </div>
 
             {/* Scores — per-workbook containment */}
             <div className="review-detail-section">
               <h3 className="review-detail-section-title">
-                Compared with {rec.merge_with_name ? `"${rec.merge_with_name}"` : 'Other Report'}
+                Compared with {rightRec ? `"${rightRec.workbook_name}"` : 'Other Report'}
               </h3>
               <div className="review-detail-scores">
                 <div className="review-detail-score-item">
                   <span className="review-detail-score-label">KPIs Covered</span>
                   <span className="review-detail-score-value" style={{ color:
                     type === 'merge'
-                      ? (sourceKpiCoverage >= 70 ? 'var(--accent-emerald)' : sourceKpiCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
-                      : (sourceKpiCoverage >= 90 ? 'var(--accent-rose)' : sourceKpiCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
+                      ? (leftKpiCoverage >= 70 ? 'var(--accent-emerald)' : leftKpiCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
+                      : (leftKpiCoverage >= 90 ? 'var(--accent-rose)' : leftKpiCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
                   }}>
-                    {sourceKpiCoverage}%
+                    {leftKpiCoverage}%
                   </span>
-                  <span className="review-detail-score-note">{sharedCount} of {sourceTotalKpis} KPIs</span>
+                  <span className="review-detail-score-note">{sharedCount} of {leftTotalKpis} KPIs</span>
                 </div>
                 <div className="review-detail-score-item">
                   <span className="review-detail-score-label">DS Columns Covered</span>
                   <span className="review-detail-score-value" style={{ color:
                     type === 'merge'
-                      ? (sourceDsCoverage >= 70 ? 'var(--accent-emerald)' : sourceDsCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
-                      : (sourceDsCoverage >= 90 ? 'var(--accent-rose)' : sourceDsCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
+                      ? (leftDsCoverage >= 70 ? 'var(--accent-emerald)' : leftDsCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
+                      : (leftDsCoverage >= 90 ? 'var(--accent-rose)' : leftDsCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
                   }}>
-                    {sourceDsCoverage}%
+                    {leftDsCoverage}%
                   </span>
-                  <span className="review-detail-score-note">{sharedDsCount} of {sourceDsCount || '?'} columns</span>
+                  <span className="review-detail-score-note">{sharedDsCount} of {leftDsCount || '?'} columns</span>
                 </div>
                 <div className="review-detail-score-item">
                   <span className="review-detail-score-label">Unique KPIs</span>
                   <span className="review-detail-score-value" style={{ color:
-                    sourceUniquePct > 0
+                    leftUniquePct > 0
                       ? (type === 'merge' ? 'var(--accent-amber)' : 'var(--accent-emerald)')
                       : 'var(--text-muted)'
                   }}>
-                    {sourceUniquePct}%
+                    {leftUniquePct}%
                   </span>
-                  <span className="review-detail-score-note">{sourceOnlyKpis.length} only in this report</span>
+                  <span className="review-detail-score-note">{leftOnlyKpis.length} only in this report</span>
                 </div>
               </div>
             </div>
 
             {/* KPIs */}
-            {(sharedKpis.length > 0 || sourceOnlyKpis.length > 0) && (
+            {(sharedKpis.length > 0 || leftOnlyKpis.length > 0) && (
               <div className="review-detail-section">
                 <h3 className="review-detail-section-title">
-                  {type === 'merge' ? 'Shared KPIs' : 'KPIs in This Report'}
+                  {type === 'merge' ? 'KPIs in Merge Candidate' : 'KPIs in This Report'}
                 </h3>
                 <div className="review-detail-kpi-list">
                   {sharedKpis.map((k, i) => (
@@ -275,7 +375,7 @@ export default function RationalizationDetailView() {
                       <span className="review-detail-shared-badge">SHARED</span>
                     </div>
                   ))}
-                  {sourceOnlyKpis.map((k, i) => (
+                  {leftOnlyKpis.map((k, i) => (
                     <div key={`source-${i}`} className="review-detail-kpi-item">
                       <span>{k}</span>
                     </div>
@@ -285,11 +385,11 @@ export default function RationalizationDetailView() {
             )}
 
             {/* Rationale (for non-decommission actions) */}
-            {type !== 'decommission' && reasons.length > 0 && (
+            {type !== 'decommission' && leftReasons.length > 0 && (
               <div className="review-detail-section">
                 <h3 className="review-detail-section-title">Governance Rationale</h3>
                 <div className="review-detail-rationale">
-                  {reasons.map((r, i) => (
+                  {leftReasons.map((r, i) => (
                     <div key={i} className="review-detail-rationale-item">
                       <span className="review-detail-rationale-icon" style={{ color: config.color }}>
                         {type === 'merge' ? '!' : '✓'}
@@ -302,10 +402,10 @@ export default function RationalizationDetailView() {
             )}
 
             {/* AI Justification (for non-decommission actions) */}
-            {type !== 'decommission' && rec.llm_justification && (
+            {type !== 'decommission' && leftRec.llm_justification && (
               <div className="review-detail-ai">
                 <Sparkles size={14} style={{ flexShrink: 0 }} />
-                <span>{rec.llm_justification}</span>
+                <span>{leftRec.llm_justification}</span>
               </div>
             )}
           </div>
@@ -317,55 +417,57 @@ export default function RationalizationDetailView() {
                 <span className="review-detail-col-label" style={{ color: 'var(--accent-emerald)' }}>
                   {type === 'merge' ? 'Target — Consolidation Destination' : 'Retain Target — Destination'}
                 </span>
-                <h2 className="review-detail-col-name">{rec.merge_with_name || '—'}</h2>
+                <h2 className="review-detail-col-name">{rightRec?.workbook_name || '—'}</h2>
               </div>
 
-              {target && (
+              {rightRec && (
                 <>
                   <div className="review-detail-section">
                     <h3 className="review-detail-section-title">
-                      Compared with "{rec.workbook_name}"
+                      Compared with "{leftRec.workbook_name}"
                     </h3>
                     <div className="review-detail-scores">
                       <div className="review-detail-score-item">
                         <span className="review-detail-score-label">KPIs Covered</span>
                         <span className="review-detail-score-value" style={{ color:
                           type === 'merge'
-                            ? (targetKpiCoverage >= 70 ? 'var(--accent-emerald)' : targetKpiCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
-                            : (targetKpiCoverage >= 90 ? 'var(--accent-rose)' : targetKpiCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
+                            ? (rightKpiCoverage >= 70 ? 'var(--accent-emerald)' : rightKpiCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
+                            : (rightKpiCoverage >= 90 ? 'var(--accent-rose)' : rightKpiCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
                         }}>
-                          {targetKpiCoverage}%
+                          {rightKpiCoverage}%
                         </span>
-                        <span className="review-detail-score-note">{sharedCount} of {targetTotalKpis} KPIs</span>
+                        <span className="review-detail-score-note">{sharedCount} of {rightTotalKpis} KPIs</span>
                       </div>
                       <div className="review-detail-score-item">
                         <span className="review-detail-score-label">DS Columns Covered</span>
                         <span className="review-detail-score-value" style={{ color:
                           type === 'merge'
-                            ? (targetDsCoverage >= 70 ? 'var(--accent-emerald)' : targetDsCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
-                            : (targetDsCoverage >= 90 ? 'var(--accent-rose)' : targetDsCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
+                            ? (rightDsCoverage >= 70 ? 'var(--accent-emerald)' : rightDsCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
+                            : (rightDsCoverage >= 90 ? 'var(--accent-rose)' : rightDsCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
                         }}>
-                          {targetDsCoverage}%
+                          {rightDsCoverage}%
                         </span>
-                        <span className="review-detail-score-note">{sharedDsCount} of {targetDsCount || '?'} columns</span>
+                        <span className="review-detail-score-note">{sharedDsCount} of {rightDsCount || '?'} columns</span>
                       </div>
                       <div className="review-detail-score-item">
                         <span className="review-detail-score-label">Unique KPIs</span>
                         <span className="review-detail-score-value" style={{ color:
-                          targetUniquePct > 0
+                          rightUniquePct > 0
                             ? (type === 'merge' ? 'var(--accent-amber)' : 'var(--accent-emerald)')
                             : 'var(--text-muted)'
                         }}>
-                          {targetUniquePct}%
+                          {rightUniquePct}%
                         </span>
-                        <span className="review-detail-score-note">{targetOnlyKpis.length} only in this report</span>
+                        <span className="review-detail-score-note">{rightOnlyKpis.length} only in this report</span>
                       </div>
                     </div>
                   </div>
 
-                  {(sharedKpis.length > 0 || targetOnlyKpis.length > 0) && (
+                  {(sharedKpis.length > 0 || rightOnlyKpis.length > 0) && (
                     <div className="review-detail-section">
-                      <h3 className="review-detail-section-title">Its KPIs</h3>
+                      <h3 className="review-detail-section-title">
+                        {type === 'merge' ? 'KPIs in Consolidation Target' : 'Its KPIs'}
+                      </h3>
                       <div className="review-detail-kpi-list">
                         {sharedKpis.map((k, i) => (
                           <div key={`target-shared-${i}`} className="review-detail-kpi-item shared">
@@ -373,7 +475,7 @@ export default function RationalizationDetailView() {
                             <span className="review-detail-shared-badge">SHARED</span>
                           </div>
                         ))}
-                        {targetOnlyKpis.map((k, i) => (
+                        {rightOnlyKpis.map((k, i) => (
                           <div key={`target-only-${i}`} className="review-detail-kpi-item">
                             <span>{k}</span>
                           </div>
@@ -382,11 +484,11 @@ export default function RationalizationDetailView() {
                     </div>
                   )}
 
-                  {cleanReasons(target.reasons).length > 0 && (
+                  {rightReasons.length > 0 && (
                     <div className="review-detail-section">
                       <h3 className="review-detail-section-title">Target Rationale</h3>
                       <div className="review-detail-rationale">
-                        {cleanReasons(target.reasons).map((r, i) => (
+                        {rightReasons.map((r, i) => (
                           <div key={i} className="review-detail-rationale-item">
                             <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-emerald)' }}>✓</span>
                             <span>{r}</span>
@@ -469,6 +571,90 @@ export default function RationalizationDetailView() {
 
         {/* Action Footer removed */}
       </div>
+
+      {/* Email dispatch Modal */}
+      {emailModalOpen && (
+        <div className="email-modal-backdrop" onClick={() => setEmailModalOpen(false)}>
+          <div className="email-modal-card" onClick={(e) => e.stopPropagation()}>
+            <button className="email-modal-close" onClick={() => setEmailModalOpen(false)}>
+              <X size={18} />
+            </button>
+            
+            {emailStep === 'input' && (
+              <form onSubmit={handleSendEmail} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--accent-blue)', marginBottom: 4 }}>
+                  <Mail size={22} />
+                  <h3 style={{ margin: 0, fontSize: '1.15rem' }}>Send Governance Report</h3>
+                </div>
+                <p className="text-secondary" style={{ fontSize: '0.85rem', margin: 0 }}>
+                  Send the compiled BI rationalization and redundancy report directly to the team via email.
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>TEAM EMAIL ADDRESS</label>
+                  <input
+                    type="email"
+                    required
+                    className="email-modal-input"
+                    placeholder="e.g. governance-team@company.com"
+                    value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+                  <button type="button" className="btn btn-ghost" onClick={() => setEmailModalOpen(false)}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    Send Report
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {emailStep === 'sending' && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 0', gap: 16 }}>
+                <div className="email-modal-spinner" />
+                <div style={{ textAlign: 'center' }}>
+                  <h3 style={{ margin: '0 0 6px 0', fontSize: '1rem' }}>Dispatching Report</h3>
+                  <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0 }}>Compiling overlap models and sending to {emailInput}...</p>
+                </div>
+              </div>
+            )}
+
+            {emailStep === 'success' && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 0', gap: 16 }}>
+                <div className="email-modal-success-icon">✓</div>
+                <div style={{ textAlign: 'center' }}>
+                  <h3 style={{ margin: '0 0 6px 0', fontSize: '1.1rem', color: 'var(--accent-emerald)' }}>Report Dispatched</h3>
+                  <p className="text-secondary" style={{ fontSize: '0.85rem', margin: 0 }}>{emailMessage}</p>
+                </div>
+                <button className="btn btn-primary" onClick={() => setEmailModalOpen(false)} style={{ marginTop: 8 }}>
+                  Done
+                </button>
+              </div>
+            )}
+
+            {emailStep === 'error' && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 0', gap: 16 }}>
+                <div className="email-modal-error-icon">!</div>
+                <div style={{ textAlign: 'center' }}>
+                  <h3 style={{ margin: '0 0 6px 0', fontSize: '1.1rem', color: 'var(--accent-rose)' }}>Dispatch Failed</h3>
+                  <p className="text-secondary" style={{ fontSize: '0.85rem', margin: 0 }}>{emailMessage}</p>
+                </div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                  <button className="btn btn-ghost" onClick={() => setEmailModalOpen(false)}>
+                    Close
+                  </button>
+                  <button className="btn btn-primary" onClick={() => handleSendEmail()}>
+                    Retry
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

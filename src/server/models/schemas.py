@@ -228,6 +228,12 @@ class GovernanceRecommendation(BaseModel):
     llm_override: bool = False
     scores: Optional[Dict[str, Any]] = None
     calculated_at: Optional[str] = None
+    sheet_names: Optional[List[str]] = None
+    user_groups: Optional[List[str]] = None
+    kpis: Optional[List[str]] = None
+    tables: Optional[List[str]] = None
+    days_ago: Optional[int] = None
+    uploaded_at: Optional[str] = None
 
 
 class GovernanceRisk(BaseModel):
