@@ -124,9 +124,37 @@ export default function RationalizationDetailView() {
   }
 
   const reasons = cleanReasons(rec.reasons);
-  const kpiPct = ((rec.kpi_overlap_score || 0) * 100).toFixed(0);
-  const dsPct = ((rec.datasource_overlap_score || 0) * 100).toFixed(0);
-  const uniqPct = ((rec.uniqueness_score || 0) * 100).toFixed(0);
+
+  // Per-workbook containment scores: what % of THIS workbook's KPIs exist in the other
+  const sourceTotalKpis = sourceKpis.length;
+  const targetTotalKpis = targetKpis.length;
+  const sharedCount = sharedKpis.length;
+
+  // Source coverage: what % of source's KPIs are covered by target
+  const sourceKpiCoverage = sourceTotalKpis > 0
+    ? Math.round((sharedCount / sourceTotalKpis) * 100) : 0;
+  // Target coverage: what % of target's KPIs are covered by source
+  const targetKpiCoverage = targetTotalKpis > 0
+    ? Math.round((sharedCount / targetTotalKpis) * 100) : 0;
+  // Source uniqueness: what % of source's KPIs are unique to it
+  const sourceUniquePct = sourceTotalKpis > 0
+    ? Math.round((sourceOnlyKpis.length / sourceTotalKpis) * 100) : 0;
+  // Target uniqueness: what % of target's KPIs are unique to it
+  const targetUniquePct = targetTotalKpis > 0
+    ? Math.round((targetOnlyKpis.length / targetTotalKpis) * 100) : 0;
+
+  // DS containment calculations:
+  const sourceDsCount = rec.ds_sources_count || 0;
+  const targetDsCount = target ? (target.ds_sources_count || 0) : 0;
+  const sharedDsCount = rec.ds_shared_count || (rec.common_datasources ? rec.common_datasources.length : 0);
+
+  const sourceDsCoverage = sourceDsCount > 0
+    ? Math.round((sharedDsCount / sourceDsCount) * 100)
+    : Math.round((rec.datasource_overlap_score || 0) * 100);
+
+  const targetDsCoverage = targetDsCount > 0
+    ? Math.round((sharedDsCount / targetDsCount) * 100)
+    : Math.round((target?.datasource_overlap_score || rec.datasource_overlap_score || 0) * 100);
 
 
 
@@ -192,21 +220,44 @@ export default function RationalizationDetailView() {
               <h2 className="review-detail-col-name">{rec.workbook_name}</h2>
             </div>
 
-            {/* Scores */}
+            {/* Scores — per-workbook containment */}
             <div className="review-detail-section">
-              <h3 className="review-detail-section-title">Overlap Scores</h3>
+              <h3 className="review-detail-section-title">
+                Compared with {rec.merge_with_name ? `"${rec.merge_with_name}"` : 'Other Report'}
+              </h3>
               <div className="review-detail-scores">
                 <div className="review-detail-score-item">
-                  <span className="review-detail-score-label">KPI Overlap</span>
-                  <span className="review-detail-score-value" style={{ color: config.color }}>{kpiPct}%</span>
+                  <span className="review-detail-score-label">KPIs Covered</span>
+                  <span className="review-detail-score-value" style={{ color:
+                    type === 'merge'
+                      ? (sourceKpiCoverage >= 70 ? 'var(--accent-emerald)' : sourceKpiCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
+                      : (sourceKpiCoverage >= 90 ? 'var(--accent-rose)' : sourceKpiCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
+                  }}>
+                    {sourceKpiCoverage}%
+                  </span>
+                  <span className="review-detail-score-note">{sharedCount} of {sourceTotalKpis} KPIs</span>
                 </div>
                 <div className="review-detail-score-item">
-                  <span className="review-detail-score-label">DS Overlap</span>
-                  <span className="review-detail-score-value" style={{ color: config.color }}>{dsPct}%</span>
+                  <span className="review-detail-score-label">DS Columns Covered</span>
+                  <span className="review-detail-score-value" style={{ color:
+                    type === 'merge'
+                      ? (sourceDsCoverage >= 70 ? 'var(--accent-emerald)' : sourceDsCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
+                      : (sourceDsCoverage >= 90 ? 'var(--accent-rose)' : sourceDsCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
+                  }}>
+                    {sourceDsCoverage}%
+                  </span>
+                  <span className="review-detail-score-note">{sharedDsCount} of {sourceDsCount || '?'} columns</span>
                 </div>
                 <div className="review-detail-score-item">
-                  <span className="review-detail-score-label">Uniqueness</span>
-                  <span className="review-detail-score-value">{uniqPct}%</span>
+                  <span className="review-detail-score-label">Unique KPIs</span>
+                  <span className="review-detail-score-value" style={{ color:
+                    sourceUniquePct > 0
+                      ? (type === 'merge' ? 'var(--accent-amber)' : 'var(--accent-emerald)')
+                      : 'var(--text-muted)'
+                  }}>
+                    {sourceUniquePct}%
+                  </span>
+                  <span className="review-detail-score-note">{sourceOnlyKpis.length} only in this report</span>
                 </div>
               </div>
             </div>
@@ -272,25 +323,42 @@ export default function RationalizationDetailView() {
               {target && (
                 <>
                   <div className="review-detail-section">
-                    <h3 className="review-detail-section-title">Overlap Scores</h3>
+                    <h3 className="review-detail-section-title">
+                      Compared with "{rec.workbook_name}"
+                    </h3>
                     <div className="review-detail-scores">
                       <div className="review-detail-score-item">
-                        <span className="review-detail-score-label">KPI</span>
-                        <span className="review-detail-score-value" style={{ color: 'var(--accent-emerald)' }}>
-                          {((target.kpi_overlap_score || 0) * 100).toFixed(0)}%
+                        <span className="review-detail-score-label">KPIs Covered</span>
+                        <span className="review-detail-score-value" style={{ color:
+                          type === 'merge'
+                            ? (targetKpiCoverage >= 70 ? 'var(--accent-emerald)' : targetKpiCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
+                            : (targetKpiCoverage >= 90 ? 'var(--accent-rose)' : targetKpiCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
+                        }}>
+                          {targetKpiCoverage}%
                         </span>
+                        <span className="review-detail-score-note">{sharedCount} of {targetTotalKpis} KPIs</span>
                       </div>
                       <div className="review-detail-score-item">
-                        <span className="review-detail-score-label">DS</span>
-                        <span className="review-detail-score-value" style={{ color: 'var(--accent-emerald)' }}>
-                          {((target.datasource_overlap_score || 0) * 100).toFixed(0)}%
+                        <span className="review-detail-score-label">DS Columns Covered</span>
+                        <span className="review-detail-score-value" style={{ color:
+                          type === 'merge'
+                            ? (targetDsCoverage >= 70 ? 'var(--accent-emerald)' : targetDsCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
+                            : (targetDsCoverage >= 90 ? 'var(--accent-rose)' : targetDsCoverage >= 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)')
+                        }}>
+                          {targetDsCoverage}%
                         </span>
+                        <span className="review-detail-score-note">{sharedDsCount} of {targetDsCount || '?'} columns</span>
                       </div>
                       <div className="review-detail-score-item">
-                        <span className="review-detail-score-label">Unique</span>
-                        <span className="review-detail-score-value">
-                          {((target.uniqueness_score || 0) * 100).toFixed(0)}%
+                        <span className="review-detail-score-label">Unique KPIs</span>
+                        <span className="review-detail-score-value" style={{ color:
+                          targetUniquePct > 0
+                            ? (type === 'merge' ? 'var(--accent-amber)' : 'var(--accent-emerald)')
+                            : 'var(--text-muted)'
+                        }}>
+                          {targetUniquePct}%
                         </span>
+                        <span className="review-detail-score-note">{targetOnlyKpis.length} only in this report</span>
                       </div>
                     </div>
                   </div>

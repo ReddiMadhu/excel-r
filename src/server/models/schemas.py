@@ -218,6 +218,8 @@ class GovernanceRecommendation(BaseModel):
     kpi_overlap_score: Optional[float] = None
     datasource_overlap_score: Optional[float] = None
     uniqueness_score: Optional[float] = None
+    ds_sources_count: Optional[int] = 0
+    ds_shared_count: Optional[int] = 0
     common_kpis: Optional[List[str]] = None
     common_datasources: Optional[List[str]] = None
     matching_fingerprints: Optional[List[str]] = None

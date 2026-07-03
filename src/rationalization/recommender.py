@@ -103,6 +103,8 @@ class Recommender:
             best_pair_common_kpis = []
             common_ds = []
             matching_fps = []
+            ds_sources_self = 0
+            ds_sources_partner = 0
             if most_similar_id:
                 pair_key = (min(wb_id, most_similar_id), max(wb_id, most_similar_id))
                 overlap = pairwise.get(pair_key, {})
@@ -110,6 +112,13 @@ class Recommender:
                 common_ds = overlap.get("common_datasources", [])
                 matching_fps = overlap.get("matching_fingerprints", [])
                 max_fp_ratio = overlap.get("fingerprint_ratio", max_fp_ratio)
+                # Track per-workbook source counts for containment display
+                if wb_id == min(wb_id, most_similar_id):
+                    ds_sources_self = overlap.get("ds_count_a", 0)
+                    ds_sources_partner = overlap.get("ds_count_b", 0)
+                else:
+                    ds_sources_self = overlap.get("ds_count_b", 0)
+                    ds_sources_partner = overlap.get("ds_count_a", 0)
 
             # Aggregate common_kpis from ALL pairwise entries involving this workbook
             all_common_kpis = set(best_pair_common_kpis)
@@ -220,6 +229,8 @@ class Recommender:
                 "kpi_overlap_score": max_kpi,
                 "datasource_overlap_score": max_ds,
                 "uniqueness_score": uni_score,
+                "ds_sources_count": ds_sources_self,
+                "ds_shared_count": len(common_ds),
                 "llm_override": False,
                 "llm_justification": None,
             }
@@ -278,6 +289,8 @@ class Recommender:
                 "kpi_overlap_score": decision["kpi_overlap_score"],
                 "datasource_overlap_score": decision["datasource_overlap_score"],
                 "uniqueness_score": decision["uniqueness_score"],
+                "ds_sources_count": decision.get("ds_sources_count", 0),
+                "ds_shared_count": decision.get("ds_shared_count", 0),
                 "llm_override": decision["llm_override"],
                 "llm_justification": decision["llm_justification"],
             })

@@ -252,6 +252,8 @@ CREATE TABLE IF NOT EXISTS governance_recommendations (
     kpi_overlap_score       FLOAT,
     datasource_overlap_score FLOAT,
     uniqueness_score        FLOAT,
+    ds_sources_count        INTEGER DEFAULT 0,
+    ds_shared_count         INTEGER DEFAULT 0,
     llm_override            BOOLEAN DEFAULT 0,
     llm_justification       TEXT,
     calculated_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -313,6 +315,8 @@ class Database:
         migrations = [
             "ALTER TABLE workbooks ADD COLUMN extraction_quality_score FLOAT",
             "ALTER TABLE workbooks ADD COLUMN comparison_mode VARCHAR DEFAULT 'insufficient'",
+            "ALTER TABLE governance_recommendations ADD COLUMN ds_sources_count INTEGER DEFAULT 0",
+            "ALTER TABLE governance_recommendations ADD COLUMN ds_shared_count INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:

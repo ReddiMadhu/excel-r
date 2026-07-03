@@ -265,6 +265,8 @@ def compute_pairwise_overlaps(
                 "kpi_containment_b": round(kpi_containment_b, 4),
                 "overlap_relationship": overlap_relationship,
                 "common_datasources": common_ds,
+                "ds_count_a": len(src_a),
+                "ds_count_b": len(src_b),
                 "matching_fingerprints": matching_fps,
                 "name_a": data_a["name"],
                 "name_b": data_b["name"],

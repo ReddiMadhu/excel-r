@@ -583,8 +583,6 @@ function scoreColor(pct, inverse) {
 function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kpiSharingMap, pairwiseKpiMap }) {
   const [kpiExpanded, setKpiExpanded] = useState(false);
   const reasons = cleanReasons(primary.reasons);
-  const kpiPct = ((primary.kpi_overlap_score || 0) * 100).toFixed(0);
-  const dsPct = ((primary.datasource_overlap_score || 0) * 100).toFixed(0);
   const commonKpis = primary.common_kpis || [];
 
   const partnerName = partner ? partner.workbook_name : (primary.merge_with_name || '');
@@ -611,6 +609,21 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
 
   const totalKpis = commonKpis.length + uniqueToPrimary.length + uniqueToPartner.length;
 
+  // Per-workbook containment: what % of each workbook's KPIs are shared
+  const primaryTotalKpis = commonKpis.length + uniqueToPrimary.length;
+  const partnerTotalKpis = commonKpis.length + uniqueToPartner.length;
+  const primaryKpiCoverage = primaryTotalKpis > 0 ? Math.round((commonKpis.length / primaryTotalKpis) * 100) : 0;
+  const partnerKpiCoverage = partnerTotalKpis > 0 ? Math.round((commonKpis.length / partnerTotalKpis) * 100) : 0;
+  const primaryUniquePct = primaryTotalKpis > 0 ? Math.round((uniqueToPrimary.length / primaryTotalKpis) * 100) : 0;
+  const partnerUniquePct = partnerTotalKpis > 0 ? Math.round((uniqueToPartner.length / partnerTotalKpis) * 100) : 0;
+
+  // DS containment per-workbook
+  const primaryDsCount = primary.ds_sources_count || 0;
+  const partnerDsCount = partner ? (partner.ds_sources_count || 0) : 0;
+  const sharedDsCount = primary.ds_shared_count || (primary.common_datasources ? primary.common_datasources.length : 0);
+  const primaryDsCoverage = primaryDsCount > 0 ? Math.round((sharedDsCount / primaryDsCount) * 100) : Math.round((primary.datasource_overlap_score || 0) * 100);
+  const partnerDsCoverage = partnerDsCount > 0 ? Math.round((sharedDsCount / partnerDsCount) * 100) : Math.round((partner?.datasource_overlap_score || primary.datasource_overlap_score || 0) * 100);
+
   return (
     <div className="rec-card merge">
       {/* Header — both workbooks with merge icon */}
@@ -636,15 +649,41 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
         </div>
       </div>
 
-      {/* Overlap Scores */}
-      <div className="rec-card-scores">
-        <div className="rec-score-item">
-          <span className="rec-score-label">KPI Overlap:</span>
-          <span className="rec-score-value" style={{ color: scoreColor(+kpiPct, false) }}>{kpiPct}%</span>
+      {/* Overlap Scores — per-workbook containment, side by side */}
+      <div className="rec-card-scores" style={{ flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 12, fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+          <span style={{ flex: 1 }}>{primary.workbook_name}</span>
+          <span style={{ flex: 1 }}>{partnerName}</span>
         </div>
-        <div className="rec-score-item">
-          <span className="rec-score-label">DS Overlap:</span>
-          <span className="rec-score-value" style={{ color: scoreColor(+dsPct, false) }}>{dsPct}%</span>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <div className="rec-score-item">
+              <span className="rec-score-label">KPIs Covered:</span>
+              <span className="rec-score-value" style={{ color: scoreColor(primaryKpiCoverage, false) }}>{primaryKpiCoverage}%</span>
+            </div>
+            <div className="rec-score-item">
+              <span className="rec-score-label">DS Columns:</span>
+              <span className="rec-score-value" style={{ color: scoreColor(primaryDsCoverage, false) }}>{primaryDsCoverage}%</span>
+            </div>
+            <div className="rec-score-item">
+              <span className="rec-score-label">Unique:</span>
+              <span className="rec-score-value" style={{ color: scoreColor(primaryUniquePct, true) }}>{primaryUniquePct}%</span>
+            </div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div className="rec-score-item">
+              <span className="rec-score-label">KPIs Covered:</span>
+              <span className="rec-score-value" style={{ color: scoreColor(partnerKpiCoverage, false) }}>{partnerKpiCoverage}%</span>
+            </div>
+            <div className="rec-score-item">
+              <span className="rec-score-label">DS Columns:</span>
+              <span className="rec-score-value" style={{ color: scoreColor(partnerDsCoverage, false) }}>{partnerDsCoverage}%</span>
+            </div>
+            <div className="rec-score-item">
+              <span className="rec-score-label">Unique:</span>
+              <span className="rec-score-value" style={{ color: scoreColor(partnerUniquePct, true) }}>{partnerUniquePct}%</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -696,7 +735,7 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
               {commonKpis.length > 0 && (
                 <div>
                   <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    Shared ({commonKpis.length} — {kpiPct}% overlap)
+                    Shared ({commonKpis.length})
                   </div>
                   <div className="rec-card-kpis-tags">
                     {commonKpis.map((k, i) => (
@@ -762,9 +801,15 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
 
 function RecCard({ rec, type, onReview, kpiSharingMap }) {
   const reasons = cleanReasons(rec.reasons);
-  const kpiPct = ((rec.kpi_overlap_score || 0) * 100).toFixed(0);
-  const dsPct = ((rec.datasource_overlap_score || 0) * 100).toFixed(0);
+  const commonKpis = rec.common_kpis || [];
+
+  // Per-workbook containment: for decommission/keep, compute from common_kpis + partner data
+  const dsCount = rec.ds_sources_count || 0;
+  const dsShared = rec.ds_shared_count || (rec.common_datasources ? rec.common_datasources.length : 0);
+  const dsCoverage = dsCount > 0 ? Math.round((dsShared / dsCount) * 100) : Math.round((rec.datasource_overlap_score || 0) * 100);
   const uniqPct = ((rec.uniqueness_score || 0) * 100).toFixed(0);
+  // KPI overlap stays as Jaccard for the summary cards (we don't have per-workbook KPI counts here)
+  const kpiPct = ((rec.kpi_overlap_score || 0) * 100).toFixed(0);
 
   const rationaleIcons = {
     merge: { icon: '!', color: 'var(--accent-amber)' },
@@ -799,8 +844,9 @@ function RecCard({ rec, type, onReview, kpiSharingMap }) {
           <span className="rec-score-value" style={{ color: scoreColor(+kpiPct, false) }}>{kpiPct}%</span>
         </div>
         <div className="rec-score-item">
-          <span className="rec-score-label">DS Overlap:</span>
-          <span className="rec-score-value" style={{ color: scoreColor(+dsPct, false) }}>{dsPct}%</span>
+          <span className="rec-score-label">DS Columns:</span>
+          <span className="rec-score-value" style={{ color: scoreColor(dsCoverage, false) }}>{dsCoverage}%</span>
+          {dsCount > 0 && <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', opacity: 0.7, marginLeft: 4 }}>{dsShared}/{dsCount}</span>}
         </div>
         <div className="rec-score-item">
           <span className="rec-score-label">Uniqueness:</span>

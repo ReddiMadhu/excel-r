@@ -67,6 +67,8 @@ async def list_recommendations():
             kpi_overlap_score=r.get("kpi_overlap_score"),
             datasource_overlap_score=r.get("datasource_overlap_score"),
             uniqueness_score=r.get("uniqueness_score"),
+            ds_sources_count=r.get("ds_sources_count", 0),
+            ds_shared_count=r.get("ds_shared_count", 0),
             common_kpis=_pj(r.get("common_kpis")),
             common_datasources=_pj(r.get("common_datasources")),
             matching_fingerprints=_pj(r.get("matching_fingerprints")),

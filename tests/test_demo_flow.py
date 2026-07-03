@@ -6,13 +6,14 @@ import sys
 import unittest
 import shutil
 import tempfile
+import json
 
 # Add project root to path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from src.server.services.result_cache import ResultCache
+from src.server.services.result_cache import ResultCache, DEFAULT_CACHE_DIR
 from src.server.models.database import Database
 from src.server.services.extraction_service import ExtractionService
 
@@ -85,6 +86,98 @@ class TestCachePreservationInDeleteAll(unittest.TestCase):
         # Confirm DB is empty
         row = self.db.query_one("SELECT COUNT(*) as cnt FROM scans")
         self.assertEqual(row["cnt"], 0)
+
+
+class TestEndToEndCaching(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "test_governance.db")
+        self.db = Database(db_path=self.db_path)
+        self.output_dir = os.path.join(self.temp_dir, "output")
+        self.cache_dir = os.path.join(self.temp_dir, "cache")
+        
+        # Override the cache dir dynamically for the test run
+        self.patch_cache_dir(self.cache_dir)
+        
+        self.extractor = ExtractionService(self.db, self.output_dir)
+
+    def tearDown(self):
+        self.db.close()
+        self.patch_cache_dir(None)  # reset
+        shutil.rmtree(self.temp_dir)
+
+    def patch_cache_dir(self, value):
+        from src.server.services import result_cache
+        if value:
+            result_cache.DEFAULT_CACHE_DIR = value
+        else:
+            result_cache.DEFAULT_CACHE_DIR = DEFAULT_CACHE_DIR
+
+    def get_db_counts(self):
+        counts = {}
+        for table in ["workbooks", "dashboards", "datasources", "worksheets", "columns", "calculated_fields"]:
+            row = self.db.query_one(f"SELECT COUNT(*) as cnt FROM {table}")
+            counts[table] = row["cnt"] if row else 0
+        return counts
+
+    def test_cache_hit_populates_db_identically(self):
+        # We'll use 4.xlsx since it's the smallest (252KB)
+        file_path = os.path.join(PROJECT_ROOT, "data", "input", "4.xlsx")
+        self.assertTrue(os.path.exists(file_path), f"Test file not found: {file_path}")
+
+        # Ensure database starts empty
+        self.get_db_counts()
+        
+        # Create a mock scan record
+        scan_db_id = self.db.insert("scans", {
+            "scan_id": "test-scan-id-1",
+            "directory_path": "/fake/path",
+            "status": "extracting",
+        })
+
+        # --- 1st run: Cache Miss (run full extraction) ---
+        print("\nRunning first extraction (Cache Miss)...")
+        res1 = self.extractor.extract_and_store(file_path, scan_db_id, scan_id_str="test-scan-id-1")
+        self.assertEqual(res1["status"], "extracted")
+        workbook_id_1 = res1["workbook_id"]
+        self.assertTrue(workbook_id_1 > 0)
+        
+        # Get DB counts after full run
+        counts_miss = self.get_db_counts()
+        print("Database counts (Cache Miss):", counts_miss)
+        self.assertGreater(counts_miss["workbooks"], 0)
+        self.assertGreater(counts_miss["dashboards"], 0)
+
+        # --- Reset DB (simulate App Service reset / Delete All) ---
+        print("Resetting database...")
+        self.db.delete_all_data()
+        counts_after_reset = self.get_db_counts()
+        for tbl, cnt in counts_after_reset.items():
+            self.assertEqual(cnt, 0, f"Table {tbl} was not cleared: {cnt} rows remain")
+
+        # Create a new scan record for the second upload
+        scan_db_id_2 = self.db.insert("scans", {
+            "scan_id": "test-scan-id-2",
+            "directory_path": "/fake/path",
+            "status": "extracting",
+        })
+
+        # --- 2nd run: Cache Hit (load from cache) ---
+        print("Running second extraction (Cache Hit)...")
+        res2 = self.extractor.extract_and_store(file_path, scan_db_id_2, scan_id_str="test-scan-id-2")
+        self.assertEqual(res2["status"], "cached")
+        workbook_id_2 = res2["workbook_id"]
+        self.assertTrue(workbook_id_2 > 0)
+
+        # Get DB counts after cache hit run
+        counts_hit = self.get_db_counts()
+        print("Database counts (Cache Hit):", counts_hit)
+
+        # Compare both counts to make sure cache hit populated the DB identically!
+        for tbl in counts_miss:
+            self.assertEqual(counts_miss[tbl], counts_hit[tbl], f"Mismatch in table {tbl} count!")
+
+        print("Verification successful: DB populated identically from cache!")
 
 
 if __name__ == "__main__":

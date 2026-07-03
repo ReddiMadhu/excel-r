@@ -3168,6 +3168,13 @@ h4 { font-size: 1rem; }
   font-variant-numeric: tabular-nums;
 }
 
+.review-detail-score-note {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
 .review-detail-kpi-list {
   display: flex;
   flex-direction: column;
@@ -3839,3 +3846,36 @@ h4 { font-size: 1rem; }
   from { opacity: 0; }
   to { opacity: 1; }
 }
+
+/* Fullscreen Close Button */
+.fullscreen-close-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 1010;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border: 1px solid var(--accent-rose);
+  border-radius: var(--radius-md);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--accent-rose);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.fullscreen-close-btn:hover {
+  background: var(--accent-rose);
+  color: white;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.3);
+}
+
+/* Hover red styling for existing minimize button */
+.hover-red-btn:hover {
+  color: var(--accent-rose) !important;
+  border-color: var(--accent-rose) !important;
+}
+

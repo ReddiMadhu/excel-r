@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import * as d3 from 'd3';
 import { AlertCircle, Sparkles, Maximize2, X, Loader2 } from 'lucide-react';
 import { api } from '../../api/client';
@@ -93,6 +94,17 @@ export function KPIDashboardGraph({
   useEffect(() => {
     setClickedNode(null);
   }, [filterAction]);
+
+  useEffect(() => {
+    if (isMaximized) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isMaximized]);
 
   useEffect(() => {
     let simulation;
@@ -922,7 +934,7 @@ export function KPIDashboardGraph({
         )}
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
-          {!isMaximizedView ? (
+          {!isMaximizedView && (
             <button
               onClick={() => setIsMaximized(true)}
               className="btn btn-ghost"
@@ -930,16 +942,6 @@ export function KPIDashboardGraph({
             >
               <Maximize2 size={13} /> Full Screen
             </button>
-          ) : (
-            onMinimize && (
-              <button
-                onClick={onMinimize}
-                className="btn btn-ghost hover-red-btn"
-                style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-              >
-                <X size={13} /> Minimize
-              </button>
-            )
           )}
         </div>
       </div>
@@ -1006,8 +1008,15 @@ export function KPIDashboardGraph({
 
       </div>
 
-      {isMaximized && (
+      {isMaximized && createPortal(
         <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'var(--bg-base)', padding: '24px', display: 'flex', flexDirection: 'column' }}>
+          <button
+            onClick={() => setIsMaximized(false)}
+            className="fullscreen-close-btn"
+            title="Exit Full Screen"
+          >
+            <X size={20} /> Close
+          </button>
           <KPIDashboardGraph
             dashboards={dashboards}
             workbookId={workbookId}
@@ -1016,10 +1025,13 @@ export function KPIDashboardGraph({
             height="100%"
             isMaximizedView={true}
             onMinimize={() => setIsMaximized(false)}
+            filterAction={filterAction}
+            title={title}
             legendExcludeGroups={legendExcludeGroups}
             hideSharedSources={hideSharedSources}
           />
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
