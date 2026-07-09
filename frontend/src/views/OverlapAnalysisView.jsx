@@ -53,6 +53,31 @@ function StreamlinedClusterCard({ cluster, onClick }) {
         </div>
       )}
 
+      {/* Members list */}
+      {cluster.members && cluster.members.length > 0 && (
+        <div className="cc-members-list" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>REPORTS IN GROUP:</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {cluster.members.map((m) => (
+              <span
+                key={m.workbook_id}
+                style={{
+                  fontSize: '0.72rem',
+                  padding: '2px 6px',
+                  background: 'var(--bg-surface)',
+                  borderRadius: '4px',
+                  border: '1px solid var(--glass-border)',
+                  color: 'var(--text-secondary)'
+                }}
+                title={m.workbook_name}
+              >
+                {m.workbook_name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Bottom Row: Ratio & Cohesion */}
       <div className="cc-card-footer">
         <span className="cc-ratio-text">
