@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
             "FastAPI backend for Excel workbook extraction and rationalization. "
             "Mirrors the BI Compass frontend contract with Excel-specific adaptations."
         ),
-        version="1.0.0",
+        version="2.0.0",
         lifespan=lifespan,
     )
 
@@ -75,6 +75,7 @@ def create_app() -> FastAPI:
     from src.server.routes import datasources
     from src.server.routes import kpi_clusters
     from src.server.routes import governance
+    from src.server.routes import clusters
     from src.server.routes import kpi_graph
     from src.server.routes import agents
     from src.server.routes import discovery
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(datasources.router)
     app.include_router(kpi_clusters.router)
     app.include_router(governance.router)
+    app.include_router(clusters.router)
     app.include_router(kpi_graph.router)
     app.include_router(agents.router)
     app.include_router(discovery.router)

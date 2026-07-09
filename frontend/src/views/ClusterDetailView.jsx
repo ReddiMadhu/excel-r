@@ -1,0 +1,151 @@
+import { useState, useEffect, useMemo } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { api } from '../api/client';
+import {
+  ArrowLeft, AlertTriangle,
+  Layers, Star, GitMerge,
+} from 'lucide-react';
+import { Loader, EmptyState } from '../components/shared';
+import ClusterMemberDetailPanel from '../components/detail/ClusterMemberDetailPanel';
+import './ClusterDetailView.css';
+
+// ─── Detail View Component ─────────────────────────────────────
+
+export default function ClusterDetailView() {
+  const { clusterId } = useParams();
+  const navigate = useNavigate();
+
+  const [cluster, setCluster] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  
+  // Sidebar state
+  const [selectedWbId, setSelectedWbId] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const detail = await api.getClusterDetail(clusterId);
+      setCluster(detail);
+      // Default selected workbook is the golden target/canonical
+      if (detail && detail.canonical_target_id) {
+        setSelectedWbId(detail.canonical_target_id);
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [clusterId]);
+
+  // Index members and recommendations
+  const workspaceData = useMemo(() => {
+    if (!cluster) return null;
+    const members = cluster.members || [];
+    const recs = cluster.recommendations || [];
+
+    const recMap = {};
+    recs.forEach(r => { recMap[r.workbook_id] = r; });
+
+    const target = members.find(m => m.workbook_id === cluster.canonical_target_id || m.cluster_role === 'canonical_target');
+    const candidates = members.filter(m => m.workbook_id !== (target?.workbook_id || cluster.canonical_target_id));
+
+    return { target, candidates, recMap };
+  }, [cluster]);
+
+  if (loading) return <div className="page-enter"><Loader /></div>;
+
+  if (error || !cluster || !workspaceData) return (
+    <div className="page-enter">
+      <EmptyState icon={AlertTriangle} title="Cluster not found" message={error || 'This cluster does not exist.'} />
+    </div>
+  );
+
+  const target = workspaceData.target;
+
+  return (
+    <div className="workspace-page page-enter">
+      {/* Back Button */}
+      <button
+        className="btn btn-ghost btn-sm"
+        style={{ marginBottom: 16 }}
+        onClick={() => navigate('/overlap-analysis')}
+      >
+        <ArrowLeft size={14} /> Back to Overlap Analysis
+      </button>
+
+      {/* Main Split Layout Workspace */}
+      <div className="consolidation-workspace">
+        
+        {/* LEFT COLUMN: Sidebar Navigator */}
+        <div className="workspace-sidebar card">
+          <div className="sidebar-header">
+            <Layers size={15} style={{ color: 'var(--accent-blue)' }} />
+            <h4>Consolidation Group</h4>
+          </div>
+
+          <div className="sidebar-group">
+            <span className="sidebar-group-title">Certified Target</span>
+            {target && (
+              <button
+                className={`sidebar-item target-item ${selectedWbId === target.workbook_id ? 'active' : ''}`}
+                onClick={() => setSelectedWbId(target.workbook_id)}
+              >
+                <Star size={13} fill="currentColor" className="star-icon" />
+                <span className="item-name" title={target.workbook_name}>{target.workbook_name}</span>
+                <span className="badge badge-keep">Keep</span>
+              </button>
+            )}
+          </div>
+
+          {workspaceData.candidates.length > 0 && (
+            <div className="sidebar-group">
+              <span className="sidebar-group-title">Consolidation Candidates ({workspaceData.candidates.length})</span>
+              <div className="sidebar-scrollable">
+                {workspaceData.candidates.map(c => {
+                  const rec = workspaceData.recMap[c.workbook_id] || {};
+                  const role = c.cluster_role || rec.cluster_role;
+                  const roleClass = role === 'decommission' ? 'decommission' : role === 'merge_source' ? 'merge' : 'review';
+                  const roleLabel = role === 'decommission' ? 'Archive' : role === 'merge_source' ? 'Merge' : 'Review';
+                  
+                  return (
+                    <button
+                      key={c.workbook_id}
+                      className={`sidebar-item candidate-item ${selectedWbId === c.workbook_id ? 'active' : ''}`}
+                      onClick={() => setSelectedWbId(c.workbook_id)}
+                    >
+                      <GitMerge size={12} className="git-icon" />
+                      <span className="item-name" title={c.workbook_name}>{c.workbook_name}</span>
+                      <span className={`badge badge-${roleClass}`}>{roleLabel}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT COLUMN: Rich Rationalization Detail Panel */}
+        <div className="workspace-details">
+          {selectedWbId ? (
+            <ClusterMemberDetailPanel
+              key={selectedWbId}
+              clusterId={parseInt(clusterId, 10)}
+              workbookId={selectedWbId}
+            />
+          ) : (
+            <div className="empty-workspace card">
+              <Layers />
+              <p>Select a report workbook from the sidebar to inspect consolidation details.</p>
+            </div>
+          )}
+        </div>
+
+      </div>
+    </div>
+  );
+}

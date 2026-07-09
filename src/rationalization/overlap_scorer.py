@@ -6,6 +6,10 @@ Computes Jaccard overlap scores across workbooks:
   - Raw source overlap (normalized ultimate_raw_sources + datasources + primary_inputs)
   - Fingerprint dedup (canonicalized computation signatures)
   - Structural context (shared final_outputs)
+  - Semantic similarity (LOB + domain + filename prefix) [new in v2]
+
+Also computes cluster_edge_score = 5-signal weighted composite,
+writes results to pairwise_overlap_cache with hash-based invalidation.
 """
 import json
 import logging
@@ -17,6 +21,11 @@ from src.rationalization.source_normalizer import (
     normalize_datasource_headers,
     normalize_source_set,
     parse_json_list,
+)
+from src.rationalization.semantic_similarity import (
+    get_workbook_semantic_features,
+    compute_semantic_similarity,
+    check_semantic_data_available,
 )
 
 logger = logging.getLogger(__name__)
@@ -142,15 +151,125 @@ def _workbook_query(db: Database, workbook_ids: Optional[List[int]] = None) -> L
     return db.query("SELECT id, name FROM workbooks ORDER BY id")
 
 
+def _get_cluster_edge_score(overlap: Dict[str, Any]) -> float:
+    """Compute 5-signal cluster_edge_score from overlap dict."""
+    w_kpi = float(os.getenv("CLUSTER_WEIGHT_KPI", "0.30"))
+    w_ds = float(os.getenv("CLUSTER_WEIGHT_DS", "0.25"))
+    w_fp = float(os.getenv("CLUSTER_WEIGHT_FP", "0.20"))
+    w_struct = float(os.getenv("CLUSTER_WEIGHT_STRUCT", "0.10"))
+    w_sem = float(os.getenv("CLUSTER_WEIGHT_SEM", "0.15"))
+    return (
+        w_kpi * overlap.get("kpi_overlap", 0.0)
+        + w_ds * overlap.get("ds_overlap", 0.0)
+        + w_fp * overlap.get("fingerprint_ratio", 0.0)
+        + w_struct * overlap.get("structural_overlap", 0.0)
+        + w_sem * overlap.get("semantic_similarity", 0.0)
+    )
+
+
+def _get_cached_overlap(
+    db: Database, id_a: int, id_b: int, hash_a: str, hash_b: str
+) -> Optional[Dict[str, Any]]:
+    """Return cached pairwise overlap if hashes match, else None."""
+    min_id, max_id = min(id_a, id_b), max(id_a, id_b)
+    h_min = hash_a if id_a < id_b else hash_b
+    h_max = hash_b if id_a < id_b else hash_a
+    row = db.query_one(
+        "SELECT * FROM pairwise_overlap_cache WHERE workbook_id_a=? AND workbook_id_b=?",
+        (min_id, max_id),
+    )
+    if row and row.get("hash_a") == h_min and row.get("hash_b") == h_max:
+        # Deserialize JSON columns
+        for col in ("common_kpis", "unique_kpis_a", "unique_kpis_b",
+                    "common_datasources", "matching_fingerprints"):
+            if isinstance(row.get(col), str):
+                try:
+                    row[col] = json.loads(row[col])
+                except Exception:
+                    row[col] = []
+        return dict(row)
+    return None
+
+
+def _upsert_overlap_cache(
+    db: Database,
+    id_a: int,
+    id_b: int,
+    hash_a: str,
+    hash_b: str,
+    overlap: Dict[str, Any],
+) -> None:
+    """UPSERT overlap result into pairwise_overlap_cache."""
+    min_id, max_id = min(id_a, id_b), max(id_a, id_b)
+    h_min = hash_a if id_a < id_b else hash_b
+    h_max = hash_b if id_a < id_b else hash_a
+    try:
+        db.execute(
+            """
+            INSERT INTO pairwise_overlap_cache
+                (workbook_id_a, workbook_id_b, hash_a, hash_b,
+                 kpi_overlap, ds_overlap, structural_overlap, fingerprint_ratio,
+                 semantic_similarity, cluster_edge_score, combined_score,
+                 overlap_class, overlap_relationship,
+                 common_kpis, unique_kpis_a, unique_kpis_b,
+                 common_datasources, matching_fingerprints)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(workbook_id_a, workbook_id_b)
+            DO UPDATE SET
+                hash_a=excluded.hash_a, hash_b=excluded.hash_b,
+                kpi_overlap=excluded.kpi_overlap, ds_overlap=excluded.ds_overlap,
+                structural_overlap=excluded.structural_overlap,
+                fingerprint_ratio=excluded.fingerprint_ratio,
+                semantic_similarity=excluded.semantic_similarity,
+                cluster_edge_score=excluded.cluster_edge_score,
+                combined_score=excluded.combined_score,
+                overlap_class=excluded.overlap_class,
+                overlap_relationship=excluded.overlap_relationship,
+                common_kpis=excluded.common_kpis, unique_kpis_a=excluded.unique_kpis_a,
+                unique_kpis_b=excluded.unique_kpis_b,
+                common_datasources=excluded.common_datasources,
+                matching_fingerprints=excluded.matching_fingerprints,
+                computed_at=datetime('now')
+            """,
+            (
+                min_id, max_id, h_min, h_max,
+                overlap.get("kpi_overlap", 0.0),
+                overlap.get("ds_overlap", 0.0),
+                overlap.get("structural_overlap", 0.0),
+                overlap.get("fingerprint_ratio", 0.0),
+                overlap.get("semantic_similarity", 0.0),
+                overlap.get("cluster_edge_score", 0.0),
+                overlap.get("combined_score", 0.0),
+                overlap.get("overlap_class", "distinct"),
+                overlap.get("overlap_relationship", "distinct"),
+                json.dumps(overlap.get("common_kpis", [])),
+                json.dumps(overlap.get("unique_kpis_a", [])),
+                json.dumps(overlap.get("unique_kpis_b", [])),
+                json.dumps(overlap.get("common_datasources", [])),
+                json.dumps(overlap.get("matching_fingerprints", [])),
+            ),
+        )
+    except Exception as e:
+        logger.warning("Failed to upsert pairwise cache for (%d,%d): %s", min_id, max_id, e)
+
+
 def compute_pairwise_overlaps(
     db: Database,
     workbook_ids: Optional[List[int]] = None,
+    use_cache: bool = True,
 ) -> Dict[Tuple[int, int], Dict[str, Any]]:
     """
-    Compute overlap scores for workbook pairs.
+    Compute overlap scores for workbook pairs (5-signal, with cache).
 
     If workbook_ids is provided, only compares within that subset.
     """
+    semantic_available = check_semantic_data_available(db)
+    if not semantic_available:
+        logger.warning(
+            "Intelligence agent not yet run — semantic_similarity will be computed "
+            "from filename tokens only. Run Intelligence first for better cluster accuracy."
+        )
+
     workbooks = _workbook_query(db, workbook_ids)
     if len(workbooks) < 2:
         logger.info("Fewer than 2 workbooks — no pairwise comparison needed")
@@ -159,16 +278,25 @@ def compute_pairwise_overlaps(
     kpi_rows = db.query("SELECT original_name, canonical_name FROM kpi_cluster_cache")
     kpi_cache = {r["original_name"]: r["canonical_name"] for r in kpi_rows}
 
+    # Get file hashes for cache lookup
+    wb_hashes: Dict[int, str] = {}
+    for wb in workbooks:
+        row = db.query_one("SELECT file_hash_md5 FROM workbooks WHERE id = ?", (wb["id"],))
+        wb_hashes[wb["id"]] = row.get("file_hash_md5") or "" if row else ""
+
     wb_data: Dict[int, Dict[str, Any]] = {}
     for wb in workbooks:
         wb_id = wb["id"]
         raw_sources = _get_raw_sources_for_workbook(db, wb_id)
+        semantic_features = get_workbook_semantic_features(db, wb_id, wb["name"])
         wb_data[wb_id] = {
             "name": wb["name"],
             "canonical_kpis": _get_canonical_kpis_for_workbook(db, wb_id),
             "raw_sources": raw_sources,
             "fingerprints": _get_fingerprints_for_workbook(db, wb_id),
             "structural_outputs": _get_structural_outputs_for_workbook(db, wb_id),
+            "semantic_features": semantic_features,
+            "semantic_data_available": semantic_available,
         }
 
     for wb_id, data in wb_data.items():
@@ -183,6 +311,15 @@ def compute_pairwise_overlaps(
         for j in range(i + 1, len(wb_ids)):
             id_a, id_b = wb_ids[i], wb_ids[j]
             data_a, data_b = wb_data[id_a], wb_data[id_b]
+
+            # Cache lookup
+            if use_cache:
+                cached = _get_cached_overlap(
+                    db, id_a, id_b, wb_hashes.get(id_a, ""), wb_hashes.get(id_b, "")
+                )
+                if cached:
+                    results[(id_a, id_b)] = cached
+                    continue
 
             kpi_a = data_a["canonical_kpis"]
             kpi_b = data_b["canonical_kpis"]
@@ -205,6 +342,11 @@ def compute_pairwise_overlaps(
             matching_fps = list(fp_a & fp_b)
             total_fps = len(fp_a | fp_b)
             fp_ratio = len(matching_fps) / total_fps if total_fps > 0 else 0.0
+
+            # Semantic similarity (5th signal)
+            sem_sim = compute_semantic_similarity(
+                data_a["semantic_features"], data_b["semantic_features"]
+            )
 
             alpha = float(os.getenv("OVERLAP_WEIGHT_KPI", "0.35"))
             beta = float(os.getenv("OVERLAP_WEIGHT_DS", "0.25"))
@@ -249,13 +391,14 @@ def compute_pairwise_overlaps(
             ):
                 overlap_class = "merge_candidate"
 
-            results[(id_a, id_b)] = {
+            entry = {
                 "kpi_overlap": kpi_overlap,
                 "ds_overlap": ds_overlap,
                 "structural_overlap": structural_overlap,
                 "fingerprint_matches": len(matching_fps),
                 "fingerprint_total": total_fps,
                 "fingerprint_ratio": fp_ratio,
+                "semantic_similarity": sem_sim,
                 "combined_score": combined_score,
                 "overlap_class": overlap_class,
                 "common_kpis": common_kpis,
@@ -270,7 +413,16 @@ def compute_pairwise_overlaps(
                 "matching_fingerprints": matching_fps,
                 "name_a": data_a["name"],
                 "name_b": data_b["name"],
+                "cluster_edge_score": 0.0,  # computed below
             }
+            entry["cluster_edge_score"] = round(_get_cluster_edge_score(entry), 4)
+            results[(id_a, id_b)] = entry
+
+            # Write to cache
+            if use_cache:
+                _upsert_overlap_cache(
+                    db, id_a, id_b, wb_hashes.get(id_a, ""), wb_hashes.get(id_b, ""), entry
+                )
 
     logger.info(
         "Computed %d pairwise overlaps for %d workbooks",

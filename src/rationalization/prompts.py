@@ -116,3 +116,111 @@ Return a JSON object:
 }}
 
 Return ONLY the JSON object. No markdown."""
+
+
+CLUSTER_VALIDATION_PROMPT = """You are a BI governance analyst reviewing a proposed cluster of Excel workbooks.
+
+Cluster Name: "{cluster_name}"
+Cohesion Score: {cohesion_score}
+Semantic Data Available: {semantic_data_available}
+
+Note: {note_text}
+
+Member workbooks:
+{members}
+
+Pairwise similarity scores within cluster:
+{pairwise_edge_scores}
+
+Your task:
+1. Assess whether these workbooks genuinely belong together in one rationalization group.
+2. Identify any edges (pairs) that seem suspiciously weak — workbooks that may have been grouped by accident.
+3. You may FLAG weak edges for human review, but you may NOT restructure the cluster.
+
+Return a JSON object:
+{{
+  "cluster_coherent": true or false,
+  "confidence": 0.0 to 1.0,
+  "suspect_edges": [
+    {{
+      "workbook_a": "exact workbook name",
+      "workbook_b": "exact workbook name",
+      "reason": "1 sentence explanation of why this edge is suspect",
+      "recommendation": "review"
+    }}
+  ],
+  "reasoning": "2-3 sentence overall assessment"
+}}
+
+Return ONLY the JSON object. No markdown.""".replace(
+    "{note_text}",
+    "LOB/domain semantic signals are unavailable (Intelligence agent not run). "
+    "Cluster scores are based on KPI, datasource, and fingerprint signals only."
+)
+
+# Note: we re-define the prompt without .replace() so the format() call works cleanly
+CLUSTER_VALIDATION_PROMPT = """You are a BI governance analyst reviewing a proposed cluster of Excel workbooks.
+
+Cluster Name: "{cluster_name}"
+Cohesion Score: {cohesion_score}
+Semantic Data Available: {semantic_data_available}
+
+Member workbooks:
+{members}
+
+Pairwise similarity scores within cluster:
+{pairwise_edge_scores}
+
+Your task:
+1. Assess whether these workbooks genuinely belong together in one rationalization group.
+2. Identify any edges (pairs) that seem suspiciously weak — workbooks that may have been grouped by accident.
+3. You may FLAG weak edges for human review, but you may NOT restructure the cluster.
+
+Return a JSON object:
+{{
+  "cluster_coherent": true or false,
+  "confidence": 0.0 to 1.0,
+  "suspect_edges": [
+    {{
+      "workbook_a": "exact workbook name",
+      "workbook_b": "exact workbook name",
+      "reason": "1 sentence explanation of why this edge is suspect",
+      "recommendation": "review"
+    }}
+  ],
+  "reasoning": "2-3 sentence overall assessment"
+}}
+
+Return ONLY the JSON object. No markdown."""
+
+
+CLUSTER_JUSTIFICATION_PROMPT = """You are a BI governance analyst writing business justifications for Excel workbook rationalization.
+
+Cluster Name: "{cluster_name}"
+Cohesion Score: {cohesion_score}
+Cluster Assessment: {stage1_reasoning}
+
+Workbooks in this cluster (with their proposed roles and unique KPIs):
+{members}
+
+For each workbook, write a 1-2 sentence business justification for its proposed action.
+Also provide semantic metadata (domain classification, line of business, user groups, AI summary).
+
+Return a JSON array:
+[
+  {{
+    "workbook_name": "exact name as provided",
+    "final_action": "keep|merge|decommission|review",
+    "justification": "1-2 sentence business reason for this action",
+    "ai_summary": "2-3 sentence summary of what this workbook does",
+    "domain_classification": "one of: reserves, compensation, claims, underwriting, investments, operations, other",
+    "line_of_business": "high-level LOB label (e.g. LNBAR, GVUL, Insurance)",
+    "user_groups": ["business teams that use this workbook, e.g. Actuarial, Finance"],
+    "override_reason": null
+  }}
+]
+
+If you believe the proposed action is WRONG, you may override it and explain why in override_reason.
+You may NOT override a workbook whose cluster_role is canonical_target.
+
+Return ONLY the JSON array. No markdown."""

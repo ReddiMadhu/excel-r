@@ -1,8 +1,9 @@
-import { Compass, Sparkles, GitCompare } from 'lucide-react';
+import { Compass, Sparkles, GitCompare, Layers } from 'lucide-react';
 import PortfolioView from '../views/PortfolioView';
 import KpiExplorerView from '../views/KpiExplorerView';
 import LandscapeView from '../views/LandscapeView';
 import RationalizationView from '../views/RationalizationView';
+import OverlapAnalysisView from '../views/OverlapAnalysisView';
 
 export const agents = [
   {
@@ -45,9 +46,10 @@ export const agents = [
     label: 'BI Rationalization',
     icon: GitCompare,
     description: 'Asset evaluation, merge/retain/discard recommendations',
-    routes: ['/rationalization'],
+    routes: ['/rationalization', '/overlap-analysis'],
     tabs: [
       { id: 'results', label: 'Rationalization', path: '/rationalization', Component: RationalizationView },
+      { id: 'overlap', label: 'Overlap Analysis', path: '/overlap-analysis', Component: OverlapAnalysisView, icon: Layers },
     ],
     metrics: (m) => [
       { label: 'Keep', value: m.keepCount },

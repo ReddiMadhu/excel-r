@@ -34,6 +34,24 @@ def _pj(val):
     return val
 
 
+def _resolve_workbook_name(db, workbook_id) -> Optional[str]:
+    if not workbook_id:
+        return None
+    row = db.query_one("SELECT name FROM workbooks WHERE id = ?", (workbook_id,))
+    return row["name"] if row else None
+
+
+def _resolve_partner_names(db, partner_ids) -> List[str]:
+    if not partner_ids:
+        return []
+    names = []
+    for pid in partner_ids:
+        name = _resolve_workbook_name(db, pid)
+        if name:
+            names.append(name)
+    return names
+
+
 @router.get("/recommendations", response_model=List[GovernanceRecommendation])
 async def list_recommendations():
     """List all workbook rationalization recommendations."""
@@ -116,6 +134,14 @@ async def list_recommendations():
             tables=tables,
             days_ago=days_ago,
             uploaded_at=uploaded_at_str,
+            # cluster fields
+            cluster_id=r.get("cluster_id"),
+            cluster_role=r.get("cluster_role"),
+            merge_partners=_pj(r.get("merge_partners")),
+            canonical_target_id=r.get("canonical_target_id"),
+            decommission_after_merge=bool(r.get("decommission_after_merge", 0)),
+            merge_partners_names=_resolve_partner_names(db, _pj(r.get("merge_partners"))),
+            canonical_target_name=_resolve_workbook_name(db, r.get("canonical_target_id")),
         ))
 
     return results
@@ -132,7 +158,9 @@ async def list_review_queue():
 async def get_pairwise_matrix(
     workbook_ids: Optional[str] = Query(None, description="Comma-separated workbook IDs"),
 ):
-    """Return full pairwise overlap matrix for heatmap visualization."""
+    """Return full pairwise overlap matrix for heatmap visualization.
+    Reads from pairwise_overlap_cache first; falls back to live computation.
+    """
     db = get_database()
     wb_id_list = None
     if workbook_ids:
@@ -142,26 +170,60 @@ async def get_pairwise_matrix(
     if wb_id_list:
         workbooks = [w for w in workbooks if w["id"] in wb_id_list]
 
-    pairwise = compute_pairwise_overlaps(db, workbook_ids=wb_id_list)
+    # Try cache first
+    cache_rows = db.query(
+        "SELECT * FROM pairwise_overlap_cache ORDER BY workbook_id_a, workbook_id_b"
+    )
+    wb_id_set = {w["id"] for w in workbooks}
 
     pairs = []
-    for (id_a, id_b), overlap in pairwise.items():
-        pairs.append(PairwiseOverlap(
-            workbook_id_a=id_a,
-            workbook_id_b=id_b,
-            workbook_name_a=overlap.get("name_a", ""),
-            workbook_name_b=overlap.get("name_b", ""),
-            kpi_overlap=round(overlap.get("kpi_overlap", 0), 4),
-            ds_overlap=round(overlap.get("ds_overlap", 0), 4),
-            structural_overlap=round(overlap.get("structural_overlap", 0), 4),
-            fingerprint_ratio=round(overlap.get("fingerprint_ratio", 0), 4),
-            combined_score=round(overlap.get("combined_score", 0), 4),
-            overlap_class=overlap.get("overlap_class", "distinct"),
-            overlap_relationship=overlap.get("overlap_relationship", "distinct"),
-            common_kpis=overlap.get("common_kpis", []),
-            unique_kpis_a=overlap.get("unique_kpis_a", []),
-            unique_kpis_b=overlap.get("unique_kpis_b", []),
-        ))
+    if cache_rows:
+        for row in cache_rows:
+            id_a, id_b = row["workbook_id_a"], row["workbook_id_b"]
+            if wb_id_list and (id_a not in wb_id_set or id_b not in wb_id_set):
+                continue
+            name_a = next((w["name"] for w in workbooks if w["id"] == id_a), str(id_a))
+            name_b = next((w["name"] for w in workbooks if w["id"] == id_b), str(id_b))
+            pairs.append(PairwiseOverlap(
+                workbook_id_a=id_a,
+                workbook_id_b=id_b,
+                workbook_name_a=name_a,
+                workbook_name_b=name_b,
+                kpi_overlap=round(row.get("kpi_overlap") or 0, 4),
+                ds_overlap=round(row.get("ds_overlap") or 0, 4),
+                structural_overlap=round(row.get("structural_overlap") or 0, 4),
+                fingerprint_ratio=round(row.get("fingerprint_ratio") or 0, 4),
+                semantic_similarity=round(row.get("semantic_similarity") or 0, 4),
+                cluster_edge_score=round(row.get("cluster_edge_score") or 0, 4),
+                combined_score=round(row.get("combined_score") or 0, 4),
+                overlap_class=row.get("overlap_class") or "distinct",
+                overlap_relationship=row.get("overlap_relationship") or "distinct",
+                common_kpis=_pj(row.get("common_kpis")) or [],
+                unique_kpis_a=_pj(row.get("unique_kpis_a")) or [],
+                unique_kpis_b=_pj(row.get("unique_kpis_b")) or [],
+            ))
+    else:
+        # Fall back to live computation
+        pairwise = compute_pairwise_overlaps(db, workbook_ids=wb_id_list)
+        for (id_a, id_b), overlap in pairwise.items():
+            pairs.append(PairwiseOverlap(
+                workbook_id_a=id_a,
+                workbook_id_b=id_b,
+                workbook_name_a=overlap.get("name_a", ""),
+                workbook_name_b=overlap.get("name_b", ""),
+                kpi_overlap=round(overlap.get("kpi_overlap", 0), 4),
+                ds_overlap=round(overlap.get("ds_overlap", 0), 4),
+                structural_overlap=round(overlap.get("structural_overlap", 0), 4),
+                fingerprint_ratio=round(overlap.get("fingerprint_ratio", 0), 4),
+                semantic_similarity=round(overlap.get("semantic_similarity", 0), 4),
+                cluster_edge_score=round(overlap.get("cluster_edge_score", 0), 4),
+                combined_score=round(overlap.get("combined_score", 0), 4),
+                overlap_class=overlap.get("overlap_class", "distinct"),
+                overlap_relationship=overlap.get("overlap_relationship", "distinct"),
+                common_kpis=overlap.get("common_kpis", []),
+                unique_kpis_a=overlap.get("unique_kpis_a", []),
+                unique_kpis_b=overlap.get("unique_kpis_b", []),
+            ))
 
     return PairwiseMatrixResponse(
         workbooks=[{"id": w["id"], "name": w["name"]} for w in workbooks],

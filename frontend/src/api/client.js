@@ -58,6 +58,12 @@ export const api = {
     headers: { 'Content-Type': 'application/json' },
   }),
 
+  // Clusters (v2)
+  getClusters: () => fetchJson('/api/governance/clusters'),
+  getClusterDetail: (clusterId) => fetchJson(`/api/governance/clusters/${clusterId}`),
+  getClusterComparison: (clusterId) => fetchJson(`/api/governance/clusters/${clusterId}/comparison`),
+  getClusterMemberDetail: (clusterId, workbookId) => fetchJson(`/api/governance/clusters/${clusterId}/member/${workbookId}/detail`),
+
   // Agents (decentralized pipelines)
   getAgentsStatus: () => fetchJson('/api/agents/status'),
   runIntelligence: () => fetchJson('/api/agents/intelligence/run', { method: 'POST' }),

@@ -234,6 +234,14 @@ class GovernanceRecommendation(BaseModel):
     tables: Optional[List[str]] = None
     days_ago: Optional[int] = None
     uploaded_at: Optional[str] = None
+    # Cluster v2 fields
+    cluster_id: Optional[int] = None
+    cluster_role: Optional[str] = None          # canonical_target|merge_source|decommission|review|keep
+    merge_partners: Optional[List[int]] = None  # list of workbook_ids in merge group
+    merge_partners_names: Optional[List[str]] = None
+    canonical_target_id: Optional[int] = None
+    canonical_target_name: Optional[str] = None
+    decommission_after_merge: bool = False
 
 
 class GovernanceRisk(BaseModel):
@@ -258,6 +266,8 @@ class PairwiseOverlap(BaseModel):
     ds_overlap: float
     structural_overlap: float = 0.0
     fingerprint_ratio: float = 0.0
+    semantic_similarity: float = 0.0
+    cluster_edge_score: float = 0.0
     combined_score: float = 0.0
     overlap_class: str = "distinct"
     overlap_relationship: str = "distinct"
@@ -326,3 +336,38 @@ class BusinessCatalogResponse(BaseModel):
 
 # Fix forward references
 WorkbookDetail.model_rebuild()
+
+
+# ── Cluster Models (v2) ──────────────────────────────────────
+
+class ClusterMemberSummary(BaseModel):
+    workbook_id: int
+    workbook_name: str
+    cluster_role: str
+    action: str
+    kpi_count: int = 0
+    ds_count: int = 0
+    unique_kpi_count: int = 0
+    formula_count: int = 0
+    decommission_after_merge: bool = False
+    is_canonical: bool = False
+
+
+class ClusterSummary(BaseModel):
+    id: int
+    cluster_name: str
+    cluster_size: int
+    cohesion_score: float
+    canonical_target_id: Optional[int] = None
+    canonical_target_name: Optional[str] = None
+    cluster_action_summary: Optional[str] = None
+    cluster_validation_flag: Optional[str] = None
+    llm_validation_skipped: bool = False
+    members: List[ClusterMemberSummary] = Field(default_factory=list)
+
+
+class ClusterDetail(ClusterSummary):
+    suspect_edges: List[Dict[str, Any]] = Field(default_factory=list)
+    pairwise_scores: Dict[str, float] = Field(default_factory=dict)
+    llm_stage1_reasoning: Optional[str] = None
+    recommendations: List[GovernanceRecommendation] = Field(default_factory=list)

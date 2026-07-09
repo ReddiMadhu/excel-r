@@ -156,20 +156,29 @@ export default function RationalizationView() {
     [recs, searchTerm, selectedWorkbook]
   );
 
-  // Deduplicated merge pairs — one card per unique A↔B pair
+  // Deduplicated merge groups by cluster_id (N-way aware)
   const mergePairs = useMemo(() => {
     const seen = new Set();
     const pairs = [];
     for (const rec of mergeRecs) {
-      if (!rec.merge_with_id) {
-        pairs.push({ primary: rec, partner: null });
-        continue;
-      }
-      const key = [rec.workbook_id, rec.merge_with_id].sort((a, b) => a - b).join('-');
-      if (!seen.has(key)) {
-        seen.add(key);
-        const partner = mergeRecs.find(r => r.workbook_id === rec.merge_with_id) || null;
-        pairs.push({ primary: rec, partner });
+      // Cluster-based dedup: group all members of the same cluster together
+      const clusterKey = rec.cluster_id
+        ? `cluster-${rec.cluster_id}`
+        : (rec.merge_with_id
+            ? [rec.workbook_id, rec.merge_with_id].sort((a, b) => a - b).join('-')
+            : `solo-${rec.workbook_id}`);
+
+      if (!seen.has(clusterKey)) {
+        seen.add(clusterKey);
+        // Find the canonical target rec
+        const canonical = mergeRecs.find(
+          r => r.cluster_id === rec.cluster_id && r.cluster_role === 'canonical_target'
+        ) || null;
+        // All other merge members
+        const partners = mergeRecs.filter(
+          r => r.cluster_id === rec.cluster_id && r.workbook_id !== rec.workbook_id
+        );
+        pairs.push({ primary: rec, partner: partners[0] || null, canonical, allPartners: partners });
       }
     }
     return pairs;
@@ -686,15 +695,38 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
           </span>
           <div className="rec-card-name" style={{ flex: 1 }}>{rightWbName}</div>
         </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <span className="badge badge-amber" style={{ fontSize: '0.68rem' }}>Merge Group</span>
-          {pairData?.overlap_relationship === 'both_have_extras' && (
-            <span className="badge" style={{ fontSize: '0.68rem', background: 'rgba(59,130,246,0.12)', color: 'var(--accent-blue)' }}>
-              Both add unique KPIs
-            </span>
-          )}
-          {primary.llm_override && <span className="badge badge-purple" style={{ fontSize: '0.68rem' }}>AI Override</span>}
-        </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span className="badge badge-amber" style={{ fontSize: '0.68rem' }}>Merge Group</span>
+            {/* N-way merge badge */}
+            {primary.canonical_target_name && (
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                → <strong style={{ color: '#10b981' }}>{primary.canonical_target_name}</strong>
+                {primary.merge_partners_names && primary.merge_partners_names.length > 1 && (
+                  <span style={{
+                    marginLeft: 4, fontSize: '0.68rem',
+                    background: 'rgba(99,102,241,0.1)', color: '#6366f1',
+                    borderRadius: 10, padding: '1px 6px'
+                  }}>+{primary.merge_partners_names.length - 1} more</span>
+                )}
+              </span>
+            )}
+            {primary.cluster_role && primary.cluster_role !== 'canonical_target' && (
+              <span style={{
+                fontSize: '0.68rem',
+                background: 'rgba(99,102,241,0.1)', color: '#6366f1',
+                borderRadius: 10, padding: '2px 8px'
+              }}>{primary.cluster_role === 'merge_source' ? 'Merge Source' : primary.cluster_role}</span>
+            )}
+            {primary.decommission_after_merge && (
+              <span style={{ fontSize: '0.68rem', color: '#f59e0b', background: 'rgba(245,158,11,0.1)', borderRadius: 10, padding: '2px 8px' }}>decommission after merge</span>
+            )}
+            {pairData?.overlap_relationship === 'both_have_extras' && (
+              <span className="badge" style={{ fontSize: '0.68rem', background: 'rgba(59,130,246,0.12)', color: 'var(--accent-blue)' }}>
+                Both add unique KPIs
+              </span>
+            )}
+            {primary.llm_override && <span className="badge badge-purple" style={{ fontSize: '0.68rem' }}>AI Override</span>}
+          </div>
       </div>
 
       {/* Overlap Scores — per-workbook containment, side by side */}

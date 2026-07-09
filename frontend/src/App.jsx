@@ -5,6 +5,8 @@ import UploadView from './views/UploadView';
 import WorkbookDetailView from './views/WorkbookDetailView';
 import AgentWorkspaceView from './views/AgentWorkspaceView';
 import RationalizationDetailView from './views/RationalizationDetailView';
+import OverlapAnalysisView from './views/OverlapAnalysisView';
+import ClusterDetailView from './views/ClusterDetailView';
 
 export default function App() {
   return (
@@ -24,6 +26,8 @@ export default function App() {
                 <Route path="/intelligence/tables" element={<Navigate to="/intelligence" replace />} />
                 <Route path="/rationalization" element={<AgentWorkspaceView agentId="rationalization" />} />
                 <Route path="/rationalization/review/:type/:id" element={<RationalizationDetailView />} />
+                <Route path="/overlap-analysis" element={<OverlapAnalysisView />} />
+                <Route path="/overlap-analysis/cluster/:clusterId" element={<ClusterDetailView />} />
                 <Route path="/workbooks/:id" element={<WorkbookDetailView />} />
                 <Route path="/kpi-clusters" element={<Navigate to="/intelligence" replace />} />
                 <Route path="/intelligence/kpi" element={<Navigate to="/intelligence" replace />} />

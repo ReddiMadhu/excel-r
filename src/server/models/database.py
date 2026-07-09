@@ -274,6 +274,56 @@ CREATE INDEX IF NOT EXISTS idx_datasources_workbook_id ON datasources(workbook_i
 CREATE INDEX IF NOT EXISTS idx_governance_recs_workbook_id ON governance_recommendations(workbook_id);
 CREATE INDEX IF NOT EXISTS idx_governance_risks_workbook_id ON governance_risks(workbook_id);
 CREATE INDEX IF NOT EXISTS idx_kpi_cluster_canonical ON kpi_cluster_cache(canonical_name);
+
+-- Table 13: workbook_clusters (Cluster rationalization v2)
+CREATE TABLE IF NOT EXISTS workbook_clusters (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    cluster_name            TEXT NOT NULL,
+    cluster_size            INTEGER NOT NULL,
+    cohesion_score          REAL NOT NULL DEFAULT 1.0,
+    canonical_target_id     INTEGER REFERENCES workbooks(id),
+    cluster_action_summary  TEXT,
+    llm_validation_skipped  INTEGER DEFAULT 0,
+    cluster_validation_flag TEXT,
+    llm_stage1_reasoning    TEXT,
+    suspect_edges           TEXT,
+    rationalization_run_id  TEXT,
+    created_at              TEXT DEFAULT (datetime('now'))
+);
+
+-- Table 14: workbook_cluster_members (junction: cluster ↔ workbooks)
+CREATE TABLE IF NOT EXISTS workbook_cluster_members (
+    cluster_id  INTEGER NOT NULL REFERENCES workbook_clusters(id),
+    workbook_id INTEGER NOT NULL REFERENCES workbooks(id),
+    PRIMARY KEY (cluster_id, workbook_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cluster_members_workbook ON workbook_cluster_members(workbook_id);
+CREATE INDEX IF NOT EXISTS idx_cluster_members_cluster  ON workbook_cluster_members(cluster_id);
+
+-- Table 15: pairwise_overlap_cache
+CREATE TABLE IF NOT EXISTS pairwise_overlap_cache (
+    workbook_id_a       INTEGER NOT NULL,
+    workbook_id_b       INTEGER NOT NULL,
+    hash_a              TEXT NOT NULL DEFAULT '',
+    hash_b              TEXT NOT NULL DEFAULT '',
+    kpi_overlap         REAL DEFAULT 0.0,
+    ds_overlap          REAL DEFAULT 0.0,
+    structural_overlap  REAL DEFAULT 0.0,
+    fingerprint_ratio   REAL DEFAULT 0.0,
+    semantic_similarity REAL DEFAULT 0.0,
+    cluster_edge_score  REAL DEFAULT 0.0,
+    combined_score      REAL DEFAULT 0.0,
+    overlap_class       TEXT DEFAULT 'distinct',
+    overlap_relationship TEXT DEFAULT 'distinct',
+    common_kpis         TEXT DEFAULT '[]',
+    unique_kpis_a       TEXT DEFAULT '[]',
+    unique_kpis_b       TEXT DEFAULT '[]',
+    common_datasources  TEXT DEFAULT '[]',
+    matching_fingerprints TEXT DEFAULT '[]',
+    computed_at         TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (workbook_id_a, workbook_id_b),
+    CHECK (workbook_id_a < workbook_id_b)
+);
 """
 
 
@@ -317,6 +367,12 @@ class Database:
             "ALTER TABLE workbooks ADD COLUMN comparison_mode VARCHAR DEFAULT 'insufficient'",
             "ALTER TABLE governance_recommendations ADD COLUMN ds_sources_count INTEGER DEFAULT 0",
             "ALTER TABLE governance_recommendations ADD COLUMN ds_shared_count INTEGER DEFAULT 0",
+            # v2 cluster columns
+            "ALTER TABLE governance_recommendations ADD COLUMN cluster_id INTEGER",
+            "ALTER TABLE governance_recommendations ADD COLUMN cluster_role TEXT",
+            "ALTER TABLE governance_recommendations ADD COLUMN merge_partners TEXT",
+            "ALTER TABLE governance_recommendations ADD COLUMN canonical_target_id INTEGER",
+            "ALTER TABLE governance_recommendations ADD COLUMN decommission_after_merge INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:
@@ -416,6 +472,25 @@ class Database:
             try:
                 conn.execute("DELETE FROM governance_recommendations WHERE workbook_id = ?", (workbook_id,))
                 conn.execute("DELETE FROM governance_risks WHERE workbook_id = ?", (workbook_id,))
+                # Pairwise cache rows referencing this workbook
+                conn.execute(
+                    "DELETE FROM pairwise_overlap_cache WHERE workbook_id_a = ? OR workbook_id_b = ?",
+                    (workbook_id, workbook_id)
+                )
+                # Cluster membership
+                conn.execute(
+                    "DELETE FROM workbook_cluster_members WHERE workbook_id = ?",
+                    (workbook_id,)
+                )
+                # Remove clusters that are now empty
+                conn.execute(
+                    """
+                    DELETE FROM workbook_clusters
+                    WHERE id NOT IN (
+                        SELECT DISTINCT cluster_id FROM workbook_cluster_members
+                    )
+                    """
+                )
                 conn.execute("DELETE FROM calculated_fields WHERE workbook_id = ?", (workbook_id,))
                 conn.execute("DELETE FROM columns WHERE workbook_id = ?", (workbook_id,))
                 conn.execute("DELETE FROM worksheets WHERE workbook_id = ?", (workbook_id,))
@@ -440,7 +515,10 @@ class Database:
         """Delete ALL data from every table. Returns counts of deleted rows."""
         # Order matters: children before parents (foreign key safe)
         tables_in_order = [
-            "governance_recommendations",
+            "governance_recommendations",   # FK child of workbook_clusters
+            "workbook_cluster_members",      # FK child of workbook_clusters
+            "workbook_clusters",
+            "pairwise_overlap_cache",        # no FK deps
             "governance_risks",
             "kpi_cluster_cache",
             "calculated_fields",
