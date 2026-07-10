@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   GitCompare, X, Target, Trash2, GitMerge, AlertCircle,
-  CheckCircle, AlertTriangle, TrendingUp,
+  CheckCircle, AlertTriangle, TrendingUp, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { api } from '../../api/client';
 import { Loader } from '../shared';
@@ -31,6 +31,19 @@ export default function MultiComparePanel({ clusterId, compareIds, targetId, onE
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Graph collapsed state
+  const [graphCollapsed, setGraphCollapsed] = useState(() => {
+    return localStorage.getItem('compare-graph-collapsed') === 'true';
+  });
+
+  const toggleGraphCollapsed = () => {
+    setGraphCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('compare-graph-collapsed', String(next));
+      return next;
+    });
+  };
 
   const compareIdsKey = [...compareIds].sort().join(',');
 
@@ -286,20 +299,31 @@ export default function MultiComparePanel({ clusterId, compareIds, targetId, onE
       </div>
 
       {/* Graph Section — Combined Lineage */}
-      <div className="multi-compare-graph-section">
-        <div className="multi-compare-graph-header">
-          <TrendingUp size={18} style={{ color: 'var(--accent-blue)' }} />
-          <span>Report Connections Lineage</span>
+      <div className={`multi-compare-graph-section ${graphCollapsed ? 'collapsed' : ''}`}>
+        <div
+          className="multi-compare-graph-header"
+          onClick={toggleGraphCollapsed}
+          style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <TrendingUp size={18} style={{ color: 'var(--accent-blue)' }} />
+            <span>Report Connections Lineage</span>
+          </div>
+          <div style={{ color: 'var(--text-muted)' }}>
+            {graphCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+          </div>
         </div>
-        <div className="multi-compare-graph-body">
-          <KPIDashboardGraph
-            view="rationalization"
-            workbookIds={graphWorkbookIds}
-            height="550px"
-            legendExcludeGroups={['Report', 'KPI']}
-            hideSharedSources={true}
-          />
-        </div>
+        {!graphCollapsed && (
+          <div className="multi-compare-graph-body">
+            <KPIDashboardGraph
+              view="rationalization"
+              workbookIds={graphWorkbookIds}
+              height="550px"
+              legendExcludeGroups={['Report', 'KPI']}
+              hideSharedSources={true}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

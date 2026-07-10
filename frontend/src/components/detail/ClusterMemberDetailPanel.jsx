@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   GitMerge, Trash2, CheckCircle, TrendingUp, Sparkles, Mail, X, FileDown,
-  Star, Send, Target, AlertTriangle,
+  Star, Send, Target, AlertTriangle, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { api } from '../../api/client';
@@ -137,6 +137,19 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
   const [emailDraft, setEmailDraft] = useState({ to: '', subject: '', body: '' });
   const [emailStep, setEmailStep] = useState('input');
   const [emailMessage, setEmailMessage] = useState('');
+
+  // Graph collapsed state
+  const [graphCollapsed, setGraphCollapsed] = useState(() => {
+    return localStorage.getItem('member-graph-collapsed') === 'true';
+  });
+
+  const toggleGraphCollapsed = () => {
+    setGraphCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('member-graph-collapsed', String(next));
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!clusterId || !workbookId) return;
@@ -787,26 +800,35 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
         {/* Decommission Rationale section removed and moved to heading subtext */}
 
         {/* Graph Section */}
-        <div className="review-detail-graph-section">
-          <div className="review-detail-graph-header">
+        <div className={`review-detail-graph-section ${graphCollapsed ? 'collapsed' : ''}`}>
+          <div
+            className="review-detail-graph-header"
+            onClick={toggleGraphCollapsed}
+            style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+          >
             <div className="review-detail-graph-title" style={{ color: config.color }}>
               <TrendingUp size={18} />
               <span>{type === 'merge' ? 'Visual Lineage & Common Connections' : 'Report Connections Lineage'}</span>
             </div>
-          </div>
-
-          <div className="review-detail-graph-body">
-            <div className="review-detail-graph-wrapper" style={{ width: '100%' }}>
-              <KPIDashboardGraph
-                view={type === 'keep' || !rec.merge_with_id ? 'landscape' : 'rationalization'}
-                workbookId={type === 'keep' || !rec.merge_with_id ? data.workbook_id : undefined}
-                workbookIds={type === 'keep' || !rec.merge_with_id ? undefined : graphWorkbookIds}
-                height="550px"
-                legendExcludeGroups={['Report', 'KPI']}
-                hideSharedSources={true}
-              />
+            <div style={{ color: 'var(--text-muted)' }}>
+              {graphCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
             </div>
           </div>
+
+          {!graphCollapsed && (
+            <div className="review-detail-graph-body">
+              <div className="review-detail-graph-wrapper" style={{ width: '100%' }}>
+                <KPIDashboardGraph
+                  view={type === 'keep' || !rec.merge_with_id ? 'landscape' : 'rationalization'}
+                  workbookId={type === 'keep' || !rec.merge_with_id ? data.workbook_id : undefined}
+                  workbookIds={type === 'keep' || !rec.merge_with_id ? undefined : graphWorkbookIds}
+                  height="550px"
+                  legendExcludeGroups={['Report', 'KPI']}
+                  hideSharedSources={true}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

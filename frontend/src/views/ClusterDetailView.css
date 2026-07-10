@@ -1288,3 +1288,99 @@
 [data-theme='dark'] .change-target-rationale {
   background: rgba(0, 0, 0, 0.2);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Collapsible Workspace Sidebar & Lineage Graphs CSS
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Smooth Slide Transitions on Consolidation Workspace Grid */
+.consolidation-workspace {
+  transition: grid-template-columns 0.25s cubic-bezier(0.4, 0, 0.2, 1), gap 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Workspace Sidebar Collapse Toggle Button */
+.workspace-sidebar-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--glass-border);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.workspace-sidebar-toggle-btn:hover {
+  background: var(--bg-elevated);
+  border-color: var(--accent-blue);
+  color: var(--text-primary);
+}
+
+/* Workspace Sidebar Expand Trigger Button */
+.workspace-expand-trigger-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent-blue);
+  background: var(--bg-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.workspace-expand-trigger-btn:hover {
+  background: rgba(236, 63, 6, 0.05);
+  border-color: var(--accent-blue);
+}
+
+/* Collapsed Workspace Sidebar Classes */
+.consolidation-workspace.sidebar-collapsed {
+  grid-template-columns: 0px 1fr !important;
+  gap: 0px !important;
+}
+
+.consolidation-workspace.sidebar-collapsed .workspace-sidebar {
+  padding: 0 !important;
+  border: none !important;
+  width: 0 !important;
+  overflow: hidden !important;
+  box-shadow: none !important;
+}
+
+/* Collapsible Graph Section Headers */
+.review-detail-graph-header:hover,
+.multi-compare-graph-header:hover {
+  background: var(--bg-elevated);
+}
+
+.review-detail-graph-section,
+.multi-compare-graph-section {
+  transition: all 0.2s ease;
+}
+
+.review-detail-graph-section.collapsed,
+.multi-compare-graph-section.collapsed {
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
+}
+
+/* Dark mode styles for toggles */
+[data-theme='dark'] .workspace-sidebar-toggle-btn,
+[data-theme='dark'] .workspace-expand-trigger-btn {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme='dark'] .workspace-sidebar-toggle-btn:hover,
+[data-theme='dark'] .workspace-expand-trigger-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+[data-theme='dark'] .review-detail-graph-header:hover,
+[data-theme='dark'] .multi-compare-graph-header:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+

@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import {
   ArrowLeft, AlertTriangle,
   Layers, Target, GitMerge, Trash2, AlertCircle, Pencil,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { Loader, EmptyState } from '../components/shared';
 import ClusterMemberDetailPanel from '../components/detail/ClusterMemberDetailPanel';
@@ -31,6 +32,16 @@ export default function ClusterDetailView() {
   // Change Target modal state
   const [changeTargetOpen, setChangeTargetOpen] = useState(false);
   const [changingTarget, setChangingTarget] = useState(false);
+
+  // Workspace Sidebar collapsible state
+  const [workspaceSidebarCollapsed, setWorkspaceSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('workspace-sidebar-collapsed') === 'true';
+  });
+
+  const toggleWorkspaceSidebar = useCallback((collapse) => {
+    setWorkspaceSidebarCollapsed(collapse);
+    localStorage.setItem('workspace-sidebar-collapsed', String(collapse));
+  }, []);
 
   const load = async () => {
     setLoading(true);
@@ -144,13 +155,23 @@ export default function ClusterDetailView() {
       </button>
 
       {/* Main Split Layout Workspace */}
-      <div className="consolidation-workspace">
+      <div className={`consolidation-workspace ${workspaceSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         
         {/* LEFT COLUMN: Sidebar Navigator */}
         <div className="workspace-sidebar card">
-          <div className="sidebar-header">
-            <Layers size={15} style={{ color: 'var(--accent-blue)' }} />
-            <h4>Consolidation Group</h4>
+          <div className="sidebar-header" style={{ justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Layers size={15} style={{ color: 'var(--accent-blue)' }} />
+              <h4>Consolidation Group</h4>
+            </div>
+            <button
+              className="workspace-sidebar-toggle-btn"
+              onClick={() => toggleWorkspaceSidebar(true)}
+              title="Collapse Group Sidebar"
+              aria-label="Collapse Group Sidebar"
+            >
+              <ChevronLeft size={13} />
+            </button>
           </div>
 
           <div className="sidebar-group">
@@ -210,32 +231,43 @@ export default function ClusterDetailView() {
 
         {/* RIGHT COLUMN: Rich Rationalization Detail Panel */}
         <div className="workspace-details">
-          {/* Comparison Toolbar — only for non-target selection */}
-          {!isTargetSelected && workspaceData.candidates.length > 1 && (
+          {/* Unified Comparison & Toolbar Section */}
+          {(workspaceSidebarCollapsed || (!isTargetSelected && workspaceData.candidates.length > 1) || isTargetSelected) && (
             <div className="compare-toolbar">
-              <CompareDropdown
-                candidates={workspaceData.candidates.map(c => ({
-                  workbook_id: c.workbook_id,
-                  workbook_name: c.workbook_name,
-                  cluster_role: c.cluster_role || (workspaceData.recMap[c.workbook_id] || {}).cluster_role,
-                }))}
-                selectedIds={compareIds}
-                onToggle={handleCompareToggle}
-                primaryId={selectedWbId}
-              />
-            </div>
-          )}
+              {workspaceSidebarCollapsed && (
+                <button
+                  className="workspace-expand-trigger-btn"
+                  onClick={() => toggleWorkspaceSidebar(false)}
+                  title="Expand Group Sidebar"
+                  style={{ marginRight: 8 }}
+                >
+                  <ChevronRight size={13} />
+                  <span>Show Sidebar</span>
+                </button>
+              )}
 
-          {/* Change Target button — when target is selected */}
-          {isTargetSelected && (
-            <div className="compare-toolbar">
-              <button
-                className="compare-dropdown-trigger"
-                onClick={() => setChangeTargetOpen(true)}
-              >
-                <Pencil size={13} />
-                <span>Change Target</span>
-              </button>
+              {!isTargetSelected && workspaceData.candidates.length > 1 && (
+                <CompareDropdown
+                  candidates={workspaceData.candidates.map(c => ({
+                    workbook_id: c.workbook_id,
+                    workbook_name: c.workbook_name,
+                    cluster_role: c.cluster_role || (workspaceData.recMap[c.workbook_id] || {}).cluster_role,
+                  }))}
+                  selectedIds={compareIds}
+                  onToggle={handleCompareToggle}
+                  primaryId={selectedWbId}
+                />
+              )}
+
+              {isTargetSelected && (
+                <button
+                  className="compare-dropdown-trigger"
+                  onClick={() => setChangeTargetOpen(true)}
+                >
+                  <Pencil size={13} />
+                  <span>Change Target</span>
+                </button>
+              )}
             </div>
           )}
 

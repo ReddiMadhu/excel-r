@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
 import Sidebar from './components/layout/Sidebar';
@@ -9,11 +10,23 @@ import OverlapAnalysisView from './views/OverlapAnalysisView';
 import ClusterDetailView from './views/ClusterDetailView';
 
 export default function App() {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('sidebar-collapsed') === 'true';
+  });
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('sidebar-collapsed', String(next));
+      return next;
+    });
+  };
+
   return (
     <ThemeProvider>
       <BrowserRouter>
-        <div className="app-layout">
-          <Sidebar />
+        <div className={`app-layout ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+          <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
           <main className="app-main">
             <div className="app-content">
               <Routes>

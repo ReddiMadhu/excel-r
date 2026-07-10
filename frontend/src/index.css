@@ -3879,3 +3879,90 @@ h4 { font-size: 1rem; }
   border-color: var(--accent-rose) !important;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Collapsible Main Sidebar Custom Styles
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Smooth Slide Transitions */
+.app-sidebar {
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), background var(--transition-base), border-color var(--transition-base) !important;
+}
+.app-main {
+  transition: margin-left 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+/* Sidebar Toggle Button styling */
+.sidebar-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  margin-left: auto;
+}
+.sidebar-collapse-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--accent-blue);
+}
+
+/* Collapsed Layout Overrides */
+.app-layout.sidebar-collapsed .app-sidebar {
+  width: 68px !important;
+}
+.app-layout.sidebar-collapsed .app-main {
+  margin-left: 68px !important;
+}
+
+.app-layout.sidebar-collapsed .sidebar-brand {
+  padding: 24px 0 20px;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+}
+.app-layout.sidebar-collapsed .sidebar-brand .sidebar-logo {
+  margin: 0;
+}
+.app-layout.sidebar-collapsed .sidebar-brand .sidebar-collapse-btn {
+  margin: 0;
+}
+
+.app-layout.sidebar-collapsed .sidebar-nav {
+  padding: 8px 6px;
+  gap: 12px;
+}
+
+.app-layout.sidebar-collapsed .nav-link, 
+.app-layout.sidebar-collapsed .agent-header {
+  justify-content: center;
+  padding: 10px 0;
+  gap: 0;
+}
+
+.app-layout.sidebar-collapsed .agent-section.collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.app-layout.sidebar-collapsed .agent-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Dark mode overrides for collapse button */
+[data-theme='dark'] .sidebar-collapse-btn {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme='dark'] .sidebar-collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+

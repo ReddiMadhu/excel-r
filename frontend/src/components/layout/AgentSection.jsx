@@ -58,6 +58,7 @@ export default function AgentSection({
   runningAgentId,
   onRunAgent,
   onAgentComplete,
+  collapsed,
 }) {
   const { pathname } = useLocation();
   const storageKey = `sidebar-agent-${agent.id}`;
@@ -103,14 +104,18 @@ export default function AgentSection({
   const metricItems = agent.metrics(metrics);
 
   return (
-    <div className="agent-section">
+    <div className={`agent-section ${collapsed ? 'collapsed' : ''}`}>
       <div className={`agent-header ${routeActive ? 'active' : ''}`}>
-        <NavLink to={agent.path} className="agent-header-link">
+        <NavLink
+          to={agent.path}
+          className="agent-header-link"
+          title={collapsed ? agent.label : undefined}
+        >
           <Icon className="agent-header-icon" />
-          <span className="agent-header-label">{agent.label}</span>
+          {!collapsed && <span className="agent-header-label">{agent.label}</span>}
         </NavLink>
 
-        {runnable && (
+        {!collapsed && runnable && (
           <button
             type="button"
             className={`agent-run-btn ${isRunning ? 'running' : ''} ${status === 'completed' ? 'completed' : ''}`}
@@ -135,7 +140,7 @@ export default function AgentSection({
           </button>
         )}
 
-        {showMetrics && (
+        {!collapsed && showMetrics && (
           <button
             type="button"
             className="agent-chevron-btn"
@@ -148,7 +153,7 @@ export default function AgentSection({
         )}
       </div>
 
-      {showMetrics && (
+      {!collapsed && showMetrics && (
         <div className={`agent-panel ${expanded ? 'expanded' : ''}`}>
           <div className="agent-metrics">
             {metricItems.map(({ label, value }) => (
