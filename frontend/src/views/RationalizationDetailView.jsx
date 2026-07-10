@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, GitMerge, Trash2, CheckCircle, TrendingUp, Sparkles, Mail, X, FileDown,
+  ArrowLeft, GitMerge, Trash2, CheckCircle, TrendingUp, Sparkles, Mail, X, FileDown, Target, AlertTriangle,
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { api } from '../api/client';
@@ -79,9 +79,9 @@ function generateDefaultEmailDraft(rec, type, sourceKpis) {
     subject = `[Governance Action Required] Consolidation & Merge Recommendation: ${rec.workbook_name}`;
     body = `Hello Stakeholders,
 
-We have analyzed the BI reporting landscape and identified significant metric and layout overlap. We recommend merging the report "${rec.workbook_name}" into "${rec.merge_with_name || 'the target certified report'}".
+We have analyzed the BI reporting landscape and identified significant metric and layout overlap. We recommend merging the report "${rec.workbook_name}" into "${rec.merge_with_name || 'the recommended target report'}".
 
-Recommended Action: Consolidate and merge into ${rec.merge_with_name || 'Target Certified Report'}
+Recommended Action: Consolidate and merge into ${rec.merge_with_name || 'Recommended Target Report'}
 
 Governance Rationale:
 ${reasonsList || '- Redundant metric definitions and database queries.'}
@@ -124,12 +124,12 @@ After decommissioning, this report metadata will be archived and database connec
 Best regards,
 BI Governance Team`;
   } else {
-    subject = `[Governance Certification] Certification Keep Status: ${rec.workbook_name}`;
+    subject = `[Governance Status] Keep Status: ${rec.workbook_name}`;
     body = `Hello Stakeholders,
 
-We have audited the report "${rec.workbook_name}" and confirmed its status as a Certified Keep report.
+We have audited the report "${rec.workbook_name}" and confirmed its status as a Keep report.
 
-Recommended Action: Certify and Keep Active
+Recommended Action: Keep Active
 
 Governance Rationale:
 ${reasonsList || '- High uniqueness and active stakeholder utilization.'}
@@ -339,13 +339,13 @@ export default function RationalizationDetailView() {
     let actionText = '';
     let actionColor = [100, 116, 139]; // Default grey
     if (type === 'merge') {
-      actionText = `CONSOLIDATION MERGE (Merge into: ${rec.merge_with_name || 'Target Report'})`;
+      actionText = `CONSOLIDATION MERGE (Target: ${rec.merge_with_name || 'Target Report'})`;
       actionColor = [217, 119, 6]; // Amber-600
     } else if (type === 'decommission') {
       actionText = 'DECOMMISSION / ARCHIVE';
       actionColor = [225, 29, 72]; // Rose-600
     } else {
-      actionText = 'CERTIFIED KEEP';
+      actionText = 'KEEP';
       actionColor = [5, 150, 105]; // Emerald-600
     }
     
@@ -565,14 +565,14 @@ export default function RationalizationDetailView() {
     decommission: {
       icon: Trash2,
       title: 'Decommission Governance Review',
-      subtitle: 'Review KPIs, governance rationale, and lineage connections before decommissioning.',
+      subtitle: 'This workbook is functionally redundant as it tracks identical metrics to the recommended target and relies on the same underlying SQL data sources.',
       color: 'var(--accent-rose)',
       iconClass: 'decommission',
     },
     keep: {
       icon: CheckCircle,
       title: 'Keep Review',
-      subtitle: 'Review KPIs, data sources, and governance status of this certified report.',
+      subtitle: 'Review KPIs, data sources, and governance status of this report.',
       color: 'var(--accent-emerald)',
       iconClass: 'keep',
     },
@@ -646,7 +646,7 @@ export default function RationalizationDetailView() {
               <span className="review-detail-col-label" style={{ color: config.color }}>
                 {type === 'merge' ? 'Source — Merge Candidate' :
                  type === 'decommission' ? 'Decommission Candidate' :
-                 'Certified Report'}
+                 'Report'}
               </span>
               <h2 className="review-detail-col-name">{leftRec.workbook_name}</h2>
             </div>
@@ -658,7 +658,7 @@ export default function RationalizationDetailView() {
               </h3>
               <div className="review-detail-scores">
                 <div className="review-detail-score-item">
-                  <span className="review-detail-score-label">KPIs Covered</span>
+                  <span className="review-detail-score-label">KPI Overlap</span>
                   <span className="review-detail-score-value" style={{ color:
                     type === 'merge'
                       ? (leftKpiCoverage >= 70 ? 'var(--accent-emerald)' : leftKpiCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
@@ -669,7 +669,7 @@ export default function RationalizationDetailView() {
                   <span className="review-detail-score-note">{sharedCount} of {leftTotalKpis} KPIs</span>
                 </div>
                 <div className="review-detail-score-item">
-                  <span className="review-detail-score-label">DS Columns Covered</span>
+                  <span className="review-detail-score-label">Data Source Overlap</span>
                   <span className="review-detail-score-value" style={{ color:
                     type === 'merge'
                       ? (leftDsCoverage >= 70 ? 'var(--accent-emerald)' : leftDsCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
@@ -722,8 +722,8 @@ export default function RationalizationDetailView() {
                 <div className="review-detail-rationale">
                   {leftReasons.map((r, i) => (
                     <div key={i} className="review-detail-rationale-item">
-                      <span className="review-detail-rationale-icon" style={{ color: config.color }}>
-                        {type === 'merge' ? '!' : '✓'}
+                      <span className="review-detail-rationale-icon" style={{ color: config.color, marginTop: '2px', display: 'flex', alignItems: 'center' }}>
+                        {type === 'merge' ? <AlertTriangle size={13} /> : <CheckCircle size={13} />}
                       </span>
                       <span>{r}</span>
                     </div>
@@ -759,7 +759,7 @@ export default function RationalizationDetailView() {
                     </h3>
                     <div className="review-detail-scores">
                       <div className="review-detail-score-item">
-                        <span className="review-detail-score-label">KPIs Covered</span>
+                        <span className="review-detail-score-label">KPI Overlap</span>
                         <span className="review-detail-score-value" style={{ color:
                           type === 'merge'
                             ? (rightKpiCoverage >= 70 ? 'var(--accent-emerald)' : rightKpiCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
@@ -770,7 +770,7 @@ export default function RationalizationDetailView() {
                         <span className="review-detail-score-note">{sharedCount} of {rightTotalKpis} KPIs</span>
                       </div>
                       <div className="review-detail-score-item">
-                        <span className="review-detail-score-label">DS Columns Covered</span>
+                        <span className="review-detail-score-label">Data Source Overlap</span>
                         <span className="review-detail-score-value" style={{ color:
                           type === 'merge'
                             ? (rightDsCoverage >= 70 ? 'var(--accent-emerald)' : rightDsCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
@@ -821,7 +821,9 @@ export default function RationalizationDetailView() {
                       <div className="review-detail-rationale">
                         {rightReasons.map((r, i) => (
                           <div key={i} className="review-detail-rationale-item">
-                            <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-emerald)' }}>✓</span>
+                            <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-emerald)', marginTop: '2px', display: 'flex', alignItems: 'center' }}>
+                              <CheckCircle size={13} />
+                            </span>
                             <span>{r}</span>
                           </div>
                         ))}
@@ -840,41 +842,7 @@ export default function RationalizationDetailView() {
           )}
         </div>
 
-        {/* Decommission Rationale at the bottom/end */}
-        {type === 'decommission' && (
-          <div className="review-detail-decommission-footer-section" style={{ marginTop: 24, padding: 20, background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', borderLeft: '4px solid var(--accent-rose)' }}>
-            <h3 style={{ margin: '0 0 12px 0', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--accent-rose)' }}>
-              <Trash2 size={18} />
-              Decommission Governance & Cleanliness Rationale
-            </h3>
-            
-            {rec.llm_justification && (
-              <div className="review-detail-ai" style={{ marginBottom: 16 }}>
-                <Sparkles size={14} style={{ flexShrink: 0 }} />
-                <span>{rec.llm_justification}</span>
-              </div>
-            )}
-
-            {reasons.length > 0 && (
-              <div className="review-detail-section" style={{ marginBottom: 16 }}>
-                <h4 className="review-detail-section-title" style={{ fontSize: '0.85rem', color: 'var(--text-primary)', marginBottom: 8 }}>Platform Cleanliness Violations</h4>
-                <div className="review-detail-rationale">
-                  {reasons.map((r, i) => (
-                    <div key={i} className="review-detail-rationale-item">
-                      <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-rose)' }}>▲</span>
-                      <span>{r}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="review-detail-impact" style={{ margin: 0, padding: 12, background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--accent-rose)' }}>
-              <strong>Governance Impact Alert:</strong> This action will archive the report metadata,
-              disconnect datasource references, and flag it in the repository index for cleanup.
-            </div>
-          </div>
-        )}
+        {/* Decommission Rationale section removed and moved to heading subtext */}
 
         {/* Graph Section with Legend */}
         <div className="review-detail-graph-section">

@@ -63,6 +63,8 @@ export const api = {
   getClusterDetail: (clusterId) => fetchJson(`/api/governance/clusters/${clusterId}`),
   getClusterComparison: (clusterId) => fetchJson(`/api/governance/clusters/${clusterId}/comparison`),
   getClusterMemberDetail: (clusterId, workbookId) => fetchJson(`/api/governance/clusters/${clusterId}/member/${workbookId}/detail`),
+  getClusterMultiCompare: (clusterId, workbookIds) =>
+    fetchJson(`/api/governance/clusters/${clusterId}/multi-compare?workbook_ids=${workbookIds.join(',')}`),
 
   // Agents (decentralized pipelines)
   getAgentsStatus: () => fetchJson('/api/agents/status'),

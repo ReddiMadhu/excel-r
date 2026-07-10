@@ -201,7 +201,7 @@ def _generate_cluster_name(
     """Auto-generate a cluster name from shared LOB, domain, and filename tokens."""
     if len(member_ids) == 1:
         row = db.query_one("SELECT name FROM workbooks WHERE id = ?", (member_ids[0],))
-        return row["name"] if row else f"Cluster {cluster_idx}"
+        return row["name"] if row else f"Group {cluster_idx}"
 
     # Gather LOB and domain (from summary_report dashboards, is_real_ai=1)
     from collections import Counter
@@ -267,7 +267,7 @@ def _generate_cluster_name(
                 unique_parts.append(p)
         return " ".join(unique_parts)
 
-    return f"Cluster {cluster_idx}"
+    return f"Group {cluster_idx}"
 
 
 # ─── Main cluster formation entry point ────────────────────────────────

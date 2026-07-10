@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import {
   GitMerge, Layers, AlertTriangle, Target,
-  ChevronRight, Search, RefreshCw,
+  ChevronRight, Search, RefreshCw, FileSpreadsheet,
 } from 'lucide-react';
 import { Loader, EmptyState } from '../components/shared';
 import PageHeader from '../components/layout/PageHeader';
@@ -13,28 +13,30 @@ import './OverlapAnalysisView.css';
 
 function StreamlinedClusterCard({ cluster, onClick }) {
   const { cluster_name, cluster_size, cohesion_score,
-          canonical_target_name, cluster_validation_flag, suspect_edges } = cluster;
+          cluster_validation_flag, suspect_edges } = cluster;
 
   const hasSuspect = cluster_validation_flag === 'llm_suspect' ||
     (Array.isArray(suspect_edges) && suspect_edges.length > 0);
 
   const redundantCount = cluster_size - 1;
 
-  const cohesionRating = cohesion_score >= 0.6 ? 'Strong'
-    : cohesion_score >= 0.35 ? 'Moderate'
-    : 'Weak';
+  const cohesionRating = cohesion_score >= 0.6 ? 'Strong Overlap Reports'
+    : cohesion_score >= 0.35 ? 'Intermediate Overlap Reports'
+    : 'Weak Overlap Reports';
 
   const cohesionColor = cohesion_score >= 0.6 ? 'var(--accent-emerald)'
     : cohesion_score >= 0.35 ? 'var(--accent-amber)'
     : 'var(--accent-rose)';
 
+  const displayName = cluster_name ? cluster_name.replace(/^Cluster\b/gi, 'Group') : '';
+
   return (
     <div className="compact-cluster-card card card-clickable" onClick={onClick}>
-      {/* Top row: Cluster Name & Flag */}
+      {/* Top row: Group Name & Flag */}
       <div className="cc-card-header">
         <div className="cc-title-group">
           <Layers size={14} style={{ color: 'var(--accent-blue)', flexShrink: 0 }} />
-          <h4 className="cc-card-title" title={cluster_name}>{cluster_name}</h4>
+          <h4 className="cc-card-title" title={displayName}>{displayName}</h4>
         </div>
         {hasSuspect && (
           <span className="badge badge-amber" style={{ fontSize: '0.65rem' }}>
@@ -42,16 +44,6 @@ function StreamlinedClusterCard({ cluster, onClick }) {
           </span>
         )}
       </div>
-
-      {/* Mid row: Canonical Target Subtitle */}
-      {canonical_target_name && (
-        <div className="cc-canonical-target">
-          <Target size={11} style={{ color: 'var(--accent-emerald)', flexShrink: 0 }} />
-          <span className="cc-canonical-name" title={canonical_target_name}>
-            {canonical_target_name}
-          </span>
-        </div>
-      )}
 
       {/* Members list */}
       {cluster.members && cluster.members.length > 0 && (
@@ -150,8 +142,8 @@ export default function OverlapAnalysisView() {
       <PageHeader title="Overlap Analysis" />
       <EmptyState
         icon={Layers}
-        title="No cluster data yet"
-        message="Run the Rationalization agent to generate workbook clusters. For best results, run Intelligence first."
+        title="No group data yet"
+        message="Run the Rationalization agent to generate workbook groups. For best results, run Intelligence first."
       />
     </div>
   );
@@ -160,7 +152,7 @@ export default function OverlapAnalysisView() {
     <div className="page-enter">
       <PageHeader
         title="Overlap Analysis"
-        subtitle="Identify and consolidate redundant report clusters."
+        subtitle="Identify and consolidate redundant report groups."
         actions={
           <button className="btn btn-ghost btn-sm" onClick={load}>
             <RefreshCw size={14} /> Refresh
@@ -240,7 +232,7 @@ export default function OverlapAnalysisView() {
         {/* Right Column: Unique Reports (Secondary) */}
         <div className="overlap-sidebar-content">
           <div className="col-title-row sidebar">
-            <Layers size={15} style={{ color: 'var(--text-muted)' }} />
+            <FileSpreadsheet size={15} style={{ color: 'var(--text-muted)' }} />
             <h3>Unique Reports ({singletonClusters.length})</h3>
           </div>
           
@@ -250,18 +242,23 @@ export default function OverlapAnalysisView() {
                 These reports have 0% overlap and require no changes.
               </p>
               <div className="singletons-list-stack">
-                {singletonClusters.map(c => (
-                  <div
-                    key={c.id}
-                    className="singleton-item-row"
-                    onClick={() => navigate(`/rationalization/review/keep/${c.members?.[0]?.workbook_id}`)}
-                  >
-                    <span className="singleton-item-name" title={c.members?.[0]?.workbook_name || c.cluster_name}>
-                      {c.members?.[0]?.workbook_name || c.cluster_name}
-                    </span>
-                    <ChevronRight size={13} className="singleton-item-chevron" />
-                  </div>
-                ))}
+                {singletonClusters.map(c => {
+                  const mappedName = c.members?.[0]?.workbook_name || (c.cluster_name ? c.cluster_name.replace(/^Cluster\b/gi, 'Group') : '');
+                  return (
+                    <div
+                      key={c.id}
+                      className="singleton-item-row"
+                      onClick={() => navigate(`/rationalization/review/keep/${c.members?.[0]?.workbook_id}`)}
+                      style={{ display: 'flex', alignItems: 'center' }}
+                    >
+                      <FileSpreadsheet size={13} style={{ color: 'var(--text-muted)', marginRight: 8, flexShrink: 0 }} />
+                      <span className="singleton-item-name" title={mappedName}>
+                        {mappedName}
+                      </span>
+                      <ChevronRight size={13} className="singleton-item-chevron" />
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ) : (

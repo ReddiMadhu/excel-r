@@ -9,6 +9,9 @@ GET /api/governance/clusters/{cluster_id}
 
 GET /api/governance/clusters/{cluster_id}/comparison
     → Comparison table data for the cluster detail view
+
+GET /api/governance/clusters/{cluster_id}/multi-compare?workbook_ids=1,2,3
+    → Pre-computed pairwise overlap data for multiple candidates vs the Target
 """
 import json
 import logging
@@ -510,4 +513,154 @@ async def get_cluster_member_detail(cluster_id: int, workbook_id: int):
         "cluster_name": cluster.get("cluster_name"),
         "canonical_target_id": cluster.get("canonical_target_id"),
         "canonical_target_name": source_rec.get("canonical_target_name"),
+    }
+
+
+@router.get("/{cluster_id}/multi-compare")
+async def get_cluster_multi_compare(cluster_id: int, workbook_ids: str = ""):
+    """
+    Pre-computed pairwise overlap data for multiple candidates vs the Target.
+    Returns per-candidate KPI/DS overlap stats in a single call.
+
+    Query param: workbook_ids — comma-separated list of candidate workbook IDs.
+    """
+    db = get_database()
+
+    # Validate cluster
+    cluster = db.query_one(
+        "SELECT * FROM workbook_clusters WHERE id = ?", (cluster_id,)
+    )
+    if not cluster:
+        raise HTTPException(status_code=404, detail=f"Cluster {cluster_id} not found")
+
+    member_ids = _get_cluster_members(db, cluster_id)
+    canonical_target_id = cluster.get("canonical_target_id")
+
+    # Parse requested workbook IDs
+    requested_ids = []
+    if workbook_ids:
+        for wid_str in workbook_ids.split(","):
+            wid_str = wid_str.strip()
+            if wid_str:
+                try:
+                    wid = int(wid_str)
+                    if wid in member_ids:
+                        requested_ids.append(wid)
+                except ValueError:
+                    pass
+
+    if not requested_ids:
+        raise HTTPException(status_code=400, detail="No valid workbook_ids provided")
+
+    # Get target data (cached once)
+    target_rec = _get_workbook_rec_full(db, canonical_target_id) if canonical_target_id else None
+    target_kpis = _get_workbook_kpis(db, canonical_target_id) if canonical_target_id else []
+    target_kpi_set = set(target_kpis)
+
+    # Target DS info
+    target_ds_count = target_rec.get("ds_sources_count", 0) if target_rec else 0
+
+    # Build per-candidate results
+    candidates_result = []
+    for wb_id in requested_ids:
+        source_rec = _get_workbook_rec_full(db, wb_id)
+        if not source_rec:
+            continue
+
+        # Determine type
+        cluster_role = source_rec.get("cluster_role", source_rec.get("action", "keep"))
+        action = source_rec.get("action", "keep")
+        wb_type = "decommission" if cluster_role == "decommission" else (
+            "merge" if cluster_role == "merge_source" else "keep"
+        )
+
+        # KPI overlap
+        source_kpis = _get_workbook_kpis(db, wb_id)
+        source_kpi_set = set(source_kpis)
+        shared_kpis = sorted([k for k in source_kpis if k in target_kpi_set])
+        source_only_kpis = sorted([k for k in source_kpis if k not in target_kpi_set])
+        target_only_kpis = sorted([k for k in target_kpis if k not in source_kpi_set])
+
+        shared_count = len(shared_kpis)
+        source_total = len(source_kpis)
+        target_total = len(target_kpis)
+
+        source_kpi_coverage = round((shared_count / source_total) * 100) if source_total > 0 else 0
+        target_kpi_coverage = round((shared_count / target_total) * 100) if target_total > 0 else 0
+        source_unique_pct = round(((source_total - shared_count) / source_total) * 100) if source_total > 0 else 0
+        target_unique_pct = round(((target_total - shared_count) / target_total) * 100) if target_total > 0 else 0
+
+        # DS overlap
+        source_ds_count = source_rec.get("ds_sources_count", 0)
+        ds_shared_count = source_rec.get("ds_shared_count", 0)
+        if not ds_shared_count and source_rec.get("common_datasources"):
+            ds_shared_count = len(source_rec["common_datasources"])
+
+        source_ds_coverage = round((ds_shared_count / source_ds_count) * 100) if source_ds_count > 0 else (
+            round((source_rec.get("datasource_overlap_score") or 0) * 100)
+        )
+        target_ds_coverage = round((ds_shared_count / target_ds_count) * 100) if target_ds_count > 0 else (
+            round((source_rec.get("datasource_overlap_score") or 0) * 100)
+        )
+
+        # Clean reasons
+        reasons = source_rec.get("reasons") or []
+        if isinstance(reasons, str):
+            try:
+                reasons = json.loads(reasons)
+            except Exception:
+                reasons = []
+        reasons = [r for r in reasons if not any(
+            x in r.lower() for x in ("fingerprint", "retained workbook", "retained over")
+        )]
+
+        candidates_result.append({
+            "workbook_id": wb_id,
+            "workbook_name": source_rec.get("workbook_name"),
+            "cluster_role": cluster_role,
+            "action": action,
+            "type": wb_type,
+            "rec": source_rec,
+            "source_kpis": source_kpis,
+            "shared_kpis": shared_kpis,
+            "source_only_kpis": source_only_kpis,
+            "target_only_kpis": target_only_kpis,
+            "kpi_coverage": {
+                "source_coverage_pct": source_kpi_coverage,
+                "target_coverage_pct": target_kpi_coverage,
+                "source_unique_pct": source_unique_pct,
+                "target_unique_pct": target_unique_pct,
+                "shared_count": shared_count,
+                "source_total": source_total,
+                "target_total": target_total,
+                "ds_shared_count": ds_shared_count,
+                "source_ds_count": source_ds_count,
+                "target_ds_count": target_ds_count,
+                "source_ds_coverage_pct": source_ds_coverage,
+                "target_ds_coverage_pct": target_ds_coverage,
+            },
+            "reasons": reasons,
+        })
+
+    # Target reasons
+    target_reasons = []
+    if target_rec:
+        target_reasons = target_rec.get("reasons") or []
+        if isinstance(target_reasons, str):
+            try:
+                target_reasons = json.loads(target_reasons)
+            except Exception:
+                target_reasons = []
+        target_reasons = [r for r in target_reasons if not any(
+            x in r.lower() for x in ("fingerprint", "retained workbook", "retained over")
+        )]
+
+    return {
+        "cluster_id": cluster_id,
+        "cluster_name": cluster.get("cluster_name"),
+        "canonical_target_id": canonical_target_id,
+        "target_rec": target_rec,
+        "target_kpis": target_kpis,
+        "target_reasons": target_reasons,
+        "candidates": candidates_result,
     }

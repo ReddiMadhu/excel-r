@@ -738,7 +738,7 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
         <div style={{ display: 'flex', gap: 12 }}>
           <div style={{ flex: 1 }}>
             <div className="rec-score-item">
-              <span className="rec-score-label">KPIs Covered:</span>
+              <span className="rec-score-label">KPI Overlap:</span>
               <span className="rec-score-value" style={{ color: scoreColor(leftKpiCoverage, false) }}>{leftKpiCoverage}%</span>
             </div>
             <div className="rec-score-item">
@@ -752,7 +752,7 @@ function MergeGroupCard({ primary, partner, onReviewPrimary, onReviewPartner, kp
           </div>
           <div style={{ flex: 1 }}>
             <div className="rec-score-item">
-              <span className="rec-score-label">KPIs Covered:</span>
+              <span className="rec-score-label">KPI Overlap:</span>
               <span className="rec-score-value" style={{ color: scoreColor(rightKpiCoverage, false) }}>{rightKpiCoverage}%</span>
             </div>
             <div className="rec-score-item">

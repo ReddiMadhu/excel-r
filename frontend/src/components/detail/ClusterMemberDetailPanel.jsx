@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   GitMerge, Trash2, CheckCircle, TrendingUp, Sparkles, Mail, X, FileDown,
-  Star, Send,
+  Star, Send, Target, AlertTriangle,
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { api } from '../../api/client';
@@ -46,9 +46,9 @@ function generateDefaultEmailDraft(rec, type, sourceKpis) {
     subject = `[Governance Action Required] Consolidation & Merge Recommendation: ${rec.workbook_name}`;
     body = `Hello Stakeholders,
 
-We have analyzed the BI reporting landscape and identified significant metric and layout overlap. We recommend merging the report "${rec.workbook_name}" into "${rec.merge_with_name || 'the target certified report'}".
+We have analyzed the BI reporting landscape and identified significant metric and layout overlap. We recommend merging the report "${rec.workbook_name}" into "${rec.merge_with_name || 'the recommended target report'}".
 
-Recommended Action: Consolidate and merge into ${rec.merge_with_name || 'Target Certified Report'}
+Recommended Action: Consolidate and merge into ${rec.merge_with_name || 'Recommended Target Report'}
 
 Governance Rationale:
 ${reasonsList || '- Redundant metric definitions and database queries.'}
@@ -91,12 +91,12 @@ After decommissioning, this report metadata will be archived and database connec
 Best regards,
 BI Governance Team`;
   } else {
-    subject = `[Governance Certification] Certification Keep Status: ${rec.workbook_name}`;
+    subject = `[Governance Status] Keep Status: ${rec.workbook_name}`;
     body = `Hello Stakeholders,
 
-We have audited the report "${rec.workbook_name}" and confirmed its status as a Certified Keep report.
+We have audited the report "${rec.workbook_name}" and confirmed its status as a Keep report.
 
-Recommended Action: Certify and Keep Active
+Recommended Action: Keep Active
 
 Governance Rationale:
 ${reasonsList || '- High uniqueness and active stakeholder utilization.'}
@@ -312,7 +312,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
       actionText = 'DECOMMISSION / ARCHIVE';
       actionColor = [225, 29, 72];
     } else {
-      actionText = 'CERTIFIED KEEP';
+      actionText = 'KEEP';
       actionColor = [5, 150, 105];
     }
     doc.setFont('helvetica', 'bold');
@@ -479,16 +479,16 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
     decommission: {
       icon: Trash2,
       title: 'Decommission Governance Review',
-      subtitle: 'Review KPIs, governance rationale, and lineage connections before decommissioning.',
+      subtitle: 'This workbook is functionally redundant as it tracks identical metrics to the recommended target and relies on the same underlying SQL data sources.',
       color: 'var(--accent-rose)',
       iconClass: 'decommission',
     },
     keep: {
-      icon: data.cluster_role === 'canonical_target' ? Star : CheckCircle,
-      title: data.cluster_role === 'canonical_target' ? 'Certified Golden Target' : 'Keep Review',
+      icon: data.cluster_role === 'canonical_target' ? Target : CheckCircle,
+      title: data.cluster_role === 'canonical_target' ? 'Recommended Target' : 'Keep Review',
       subtitle: data.cluster_role === 'canonical_target'
-        ? 'This workbook is retained as the authoritative reference for this reporting cluster.'
-        : 'Review KPIs, data sources, and governance status of this certified report.',
+        ? 'This workbook is retained as the authoritative reference for this reporting group.'
+        : 'Review KPIs, data sources, and governance status of this report.',
       color: 'var(--accent-emerald)',
       iconClass: 'keep',
     },
@@ -549,8 +549,8 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
               <span className="review-detail-col-label" style={{ color: config.color }}>
                 {type === 'merge' ? 'Source — Merge Candidate' :
                  type === 'decommission' ? 'Decommission Candidate' :
-                 data.cluster_role === 'canonical_target' ? 'Certified Golden Target' :
-                 'Certified Report'}
+                 data.cluster_role === 'canonical_target' ? 'Recommended Target' :
+                 'Report'}
               </span>
               <h2 className="review-detail-col-name">{leftRec?.workbook_name}</h2>
             </div>
@@ -562,7 +562,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
               </h3>
               <div className="review-detail-scores">
                 <div className="review-detail-score-item">
-                  <span className="review-detail-score-label">KPIs Covered</span>
+                  <span className="review-detail-score-label">KPI Overlap</span>
                   <span className="review-detail-score-value" style={{ color:
                     type === 'merge'
                       ? (leftKpiCoverage >= 70 ? 'var(--accent-emerald)' : leftKpiCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
@@ -573,7 +573,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
                   <span className="review-detail-score-note">{cov.shared_count} of {leftKpis?.length || 0} KPIs</span>
                 </div>
                 <div className="review-detail-score-item">
-                  <span className="review-detail-score-label">DS Columns Covered</span>
+                  <span className="review-detail-score-label">Data Source Overlap</span>
                   <span className="review-detail-score-value" style={{ color:
                     type === 'merge'
                       ? (leftDsCoverage >= 70 ? 'var(--accent-emerald)' : leftDsCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
@@ -626,8 +626,8 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
                 <div className="review-detail-rationale">
                   {leftReasons.map((r, i) => (
                     <div key={i} className="review-detail-rationale-item">
-                      <span className="review-detail-rationale-icon" style={{ color: config.color }}>
-                        {type === 'merge' ? '!' : '✓'}
+                      <span className="review-detail-rationale-icon" style={{ color: config.color, marginTop: '2px', display: 'flex', alignItems: 'center' }}>
+                        {type === 'merge' ? <AlertTriangle size={13} /> : <CheckCircle size={13} />}
                       </span>
                       <span>{r}</span>
                     </div>
@@ -663,7 +663,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
                     </h3>
                     <div className="review-detail-scores">
                       <div className="review-detail-score-item">
-                        <span className="review-detail-score-label">KPIs Covered</span>
+                        <span className="review-detail-score-label">KPI Overlap</span>
                         <span className="review-detail-score-value" style={{ color:
                           type === 'merge'
                             ? (rightKpiCoverage >= 70 ? 'var(--accent-emerald)' : rightKpiCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
@@ -674,7 +674,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
                         <span className="review-detail-score-note">{cov.shared_count} of {rightKpis?.length || 0} KPIs</span>
                       </div>
                       <div className="review-detail-score-item">
-                        <span className="review-detail-score-label">DS Columns Covered</span>
+                        <span className="review-detail-score-label">Data Source Overlap</span>
                         <span className="review-detail-score-value" style={{ color:
                           type === 'merge'
                             ? (rightDsCoverage >= 70 ? 'var(--accent-emerald)' : rightDsCoverage >= 40 ? 'var(--accent-amber)' : 'var(--text-muted)')
@@ -725,7 +725,9 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
                       <div className="review-detail-rationale">
                         {rightReasons.map((r, i) => (
                           <div key={i} className="review-detail-rationale-item">
-                            <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-emerald)' }}>✓</span>
+                            <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-emerald)', marginTop: '2px', display: 'flex', alignItems: 'center' }}>
+                              <CheckCircle size={13} />
+                            </span>
                             <span>{r}</span>
                           </div>
                         ))}
@@ -748,21 +750,25 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
             <div className="review-detail-col">
               <div className="review-detail-col-header" style={{ borderColor: 'var(--accent-emerald)' }}>
                 <span className="review-detail-col-label" style={{ color: 'var(--accent-emerald)' }}>
-                  Certification Status
+                  Status
                 </span>
-                <h2 className="review-detail-col-name">Certified Active</h2>
+                <h2 className="review-detail-col-name">Active</h2>
               </div>
               <div className="review-detail-section">
                 <h3 className="review-detail-section-title">Governance Rationale</h3>
                 <div className="review-detail-rationale">
                   {reasons.length > 0 ? reasons.map((r, i) => (
                     <div key={i} className="review-detail-rationale-item">
-                      <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-emerald)' }}>✓</span>
+                      <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-emerald)', marginTop: '2px', display: 'flex', alignItems: 'center' }}>
+                        <CheckCircle size={13} />
+                      </span>
                       <span>{r}</span>
                     </div>
                   )) : (
                     <div className="review-detail-rationale-item">
-                      <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-emerald)' }}>✓</span>
+                      <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-emerald)', marginTop: '2px', display: 'flex', alignItems: 'center' }}>
+                        <CheckCircle size={13} />
+                      </span>
                       <span>High uniqueness and active stakeholder utilization.</span>
                     </div>
                   )}
@@ -778,41 +784,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
           )}
         </div>
 
-        {/* Decommission Rationale at the bottom */}
-        {type === 'decommission' && (
-          <div className="review-detail-decommission-footer-section" style={{ marginTop: 24, padding: 20, background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', borderLeft: '4px solid var(--accent-rose)' }}>
-            <h3 style={{ margin: '0 0 12px 0', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--accent-rose)' }}>
-              <Trash2 size={18} />
-              Decommission Governance & Cleanliness Rationale
-            </h3>
-
-            {rec.llm_justification && (
-              <div className="review-detail-ai" style={{ marginBottom: 16 }}>
-                <Sparkles size={14} style={{ flexShrink: 0 }} />
-                <span>{rec.llm_justification}</span>
-              </div>
-            )}
-
-            {reasons.length > 0 && (
-              <div className="review-detail-section" style={{ marginBottom: 16 }}>
-                <h4 className="review-detail-section-title" style={{ fontSize: '0.85rem', color: 'var(--text-primary)', marginBottom: 8 }}>Platform Cleanliness Violations</h4>
-                <div className="review-detail-rationale">
-                  {reasons.map((r, i) => (
-                    <div key={i} className="review-detail-rationale-item">
-                      <span className="review-detail-rationale-icon" style={{ color: 'var(--accent-rose)' }}>▲</span>
-                      <span>{r}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="review-detail-impact" style={{ margin: 0, padding: 12, background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--accent-rose)' }}>
-              <strong>Governance Impact Alert:</strong> This action will archive the report metadata,
-              disconnect datasource references, and flag it in the repository index for cleanup.
-            </div>
-          </div>
-        )}
+        {/* Decommission Rationale section removed and moved to heading subtext */}
 
         {/* Graph Section */}
         <div className="review-detail-graph-section">
