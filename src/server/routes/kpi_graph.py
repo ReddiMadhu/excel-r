@@ -249,31 +249,27 @@ def _add_workbook_kpi_nodes(
         return
 
     placeholders = ",".join("?" * len(workbook_ids))
-    dashboards = db.query(
+    # Query calculated fields directly matching the KPI criteria (formula, pivot, total)
+    cfs = db.query(
         f"""
-        SELECT d.id, d.workbook_id, d.sheet_type
-        FROM dashboards d
-        WHERE d.workbook_id IN ({placeholders})
-          AND (d.sheet_type IS NULL OR d.sheet_type != 'raw_data')
+        SELECT DISTINCT workbook_id, name, definition 
+        FROM calculated_fields
+        WHERE workbook_id IN ({placeholders})
+          AND column_type IN ('formula_based', 'pivot_value', 'total')
         """,
         tuple(workbook_ids),
     )
 
     linked: Set[Tuple[int, str]] = set()
-    for dash in dashboards:
-        wb_node = f"wb_{dash['workbook_id']}"
-        cfs = db.query(
-            "SELECT name, definition FROM calculated_fields WHERE dashboard_id = ?",
-            (dash["id"],),
-        )
-        for cf in cfs:
-            canon_name = kpi_map.get(cf["name"].lower(), cf["name"])
-            kid = _kpi_node_id(canon_name)
-            if (dash["workbook_id"], kid) in linked:
-                continue
-            linked.add((dash["workbook_id"], kid))
-            add_node(kid, "KPI", canon_name, {"definition": cf.get("definition") or ""})
-            add_link(wb_node, kid, "has_kpi")
+    for cf in cfs:
+        wb_node = f"wb_{cf['workbook_id']}"
+        canon_name = kpi_map.get(cf["name"].lower(), cf["name"])
+        kid = _kpi_node_id(canon_name)
+        if (cf["workbook_id"], kid) in linked:
+            continue
+        linked.add((cf["workbook_id"], kid))
+        add_node(kid, "KPI", canon_name, {"definition": cf.get("definition") or ""})
+        add_link(wb_node, kid, "has_kpi")
 
 
 def build_rationalization_graph(workbook_ids: Optional[List[int]] = None):

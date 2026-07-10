@@ -86,6 +86,22 @@ export default function MultiComparePanel({ clusterId, compareIds, targetId, onE
 
   const { target_rec, target_kpis, target_reasons, candidates } = data;
 
+  const { targetSharedKpis, targetOnlyKpis } = useMemo(() => {
+    const sharedSet = new Set();
+    if (candidates) {
+      candidates.forEach(c => {
+        if (c.shared_kpis) {
+          c.shared_kpis.forEach(k => sharedSet.add(k));
+        }
+      });
+    }
+    const tKpis = target_kpis || [];
+    return {
+      targetSharedKpis: tKpis.filter(k => sharedSet.has(k)),
+      targetOnlyKpis: tKpis.filter(k => !sharedSet.has(k)),
+    };
+  }, [target_kpis, candidates]);
+
   const getRoleConfig = (type, role) => {
     if (type === 'decommission' || role === 'decommission') return {
       label: 'Archive', icon: Trash2, color: 'var(--accent-rose)', className: 'decommission',
@@ -269,8 +285,14 @@ export default function MultiComparePanel({ clusterId, compareIds, targetId, onE
               <div className="compare-section">
                 <h3 className="compare-section-title">Target KPIs</h3>
                 <div className="compare-kpi-list">
-                  {target_kpis.map((k, i) => (
-                    <div key={`t-${i}`} className="compare-kpi-item target-kpi">
+                  {(targetSharedKpis || []).map((k, i) => (
+                    <div key={`ts-${i}`} className="compare-kpi-item shared">
+                      <span>{k}</span>
+                      <span className="compare-shared-badge">SHARED</span>
+                    </div>
+                  ))}
+                  {(targetOnlyKpis || []).map((k, i) => (
+                    <div key={`to-${i}`} className="compare-kpi-item target-kpi">
                       <span>{k}</span>
                     </div>
                   ))}
