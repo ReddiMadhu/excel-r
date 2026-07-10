@@ -72,6 +72,25 @@ export default function MultiComparePanel({ clusterId, compareIds, targetId, onE
     return ids;
   }, [compareIdsKey, targetId]);
 
+  const { targetSharedKpis, targetOnlyKpis } = useMemo(() => {
+    const sharedSet = new Set();
+    const candidates = data?.candidates;
+    const target_kpis = data?.target_kpis;
+    
+    if (candidates) {
+      candidates.forEach(c => {
+        if (c.shared_kpis) {
+          c.shared_kpis.forEach(k => sharedSet.add(k));
+        }
+      });
+    }
+    const tKpis = target_kpis || [];
+    return {
+      targetSharedKpis: tKpis.filter(k => sharedSet.has(k)),
+      targetOnlyKpis: tKpis.filter(k => !sharedSet.has(k)),
+    };
+  }, [data]);
+
   if (loading) return <div className="page-enter" style={{ padding: 40 }}><Loader /></div>;
 
   if (error || !data) {
@@ -85,22 +104,6 @@ export default function MultiComparePanel({ clusterId, compareIds, targetId, onE
   }
 
   const { target_rec, target_kpis, target_reasons, candidates } = data;
-
-  const { targetSharedKpis, targetOnlyKpis } = useMemo(() => {
-    const sharedSet = new Set();
-    if (candidates) {
-      candidates.forEach(c => {
-        if (c.shared_kpis) {
-          c.shared_kpis.forEach(k => sharedSet.add(k));
-        }
-      });
-    }
-    const tKpis = target_kpis || [];
-    return {
-      targetSharedKpis: tKpis.filter(k => sharedSet.has(k)),
-      targetOnlyKpis: tKpis.filter(k => !sharedSet.has(k)),
-    };
-  }, [target_kpis, candidates]);
 
   const getRoleConfig = (type, role) => {
     if (type === 'decommission' || role === 'decommission') return {
