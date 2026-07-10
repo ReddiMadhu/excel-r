@@ -65,6 +65,12 @@ export const api = {
   getClusterMemberDetail: (clusterId, workbookId) => fetchJson(`/api/governance/clusters/${clusterId}/member/${workbookId}/detail`),
   getClusterMultiCompare: (clusterId, workbookIds) =>
     fetchJson(`/api/governance/clusters/${clusterId}/multi-compare?workbook_ids=${workbookIds.join(',')}`),
+  changeClusterTarget: (clusterId, newTargetId, reason) =>
+    fetchJson(`/api/governance/clusters/${clusterId}/target`, {
+      method: 'PUT',
+      body: JSON.stringify({ new_target_id: newTargetId, reason }),
+      headers: { 'Content-Type': 'application/json' },
+    }),
 
   // Agents (decentralized pipelines)
   getAgentsStatus: () => fetchJson('/api/agents/status'),

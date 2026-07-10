@@ -373,6 +373,8 @@ class Database:
             "ALTER TABLE governance_recommendations ADD COLUMN merge_partners TEXT",
             "ALTER TABLE governance_recommendations ADD COLUMN canonical_target_id INTEGER",
             "ALTER TABLE governance_recommendations ADD COLUMN decommission_after_merge INTEGER DEFAULT 0",
+            # Human-in-the-loop target override
+            "ALTER TABLE workbook_clusters ADD COLUMN target_override_reason TEXT",
         ]
         for sql in migrations:
             try:

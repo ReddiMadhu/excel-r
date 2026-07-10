@@ -3,12 +3,13 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import {
   ArrowLeft, AlertTriangle,
-  Layers, Target, GitMerge, Trash2, AlertCircle,
+  Layers, Target, GitMerge, Trash2, AlertCircle, Pencil,
 } from 'lucide-react';
 import { Loader, EmptyState } from '../components/shared';
 import ClusterMemberDetailPanel from '../components/detail/ClusterMemberDetailPanel';
 import MultiComparePanel from '../components/detail/MultiComparePanel';
 import CompareDropdown from '../components/detail/CompareDropdown';
+import ChangeTargetModal from '../components/detail/ChangeTargetModal';
 import './ClusterDetailView.css';
 
 // ─── Detail View Component ─────────────────────────────────────
@@ -26,6 +27,10 @@ export default function ClusterDetailView() {
 
   // Comparison state
   const [compareIds, setCompareIds] = useState(new Set());
+
+  // Change Target modal state
+  const [changeTargetOpen, setChangeTargetOpen] = useState(false);
+  const [changingTarget, setChangingTarget] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -99,6 +104,24 @@ export default function ClusterDetailView() {
     setCompareIds(new Set([selectedWbId]));
   }, [selectedWbId]);
 
+  // Change Target confirm handler
+  const handleChangeTargetConfirm = useCallback(async (newTargetId, reason) => {
+    setChangingTarget(true);
+    try {
+      await api.changeClusterTarget(parseInt(clusterId, 10), newTargetId, reason);
+      setChangeTargetOpen(false);
+      // Reload cluster data and auto-select new target
+      const detail = await api.getClusterDetail(clusterId);
+      setCluster(detail);
+      setSelectedWbId(newTargetId);
+      setCompareIds(new Set());
+    } catch (err) {
+      throw err; // Let the modal handle the error
+    } finally {
+      setChangingTarget(false);
+    }
+  }, [clusterId]);
+
   if (loading) return <div className="page-enter"><Loader /></div>;
 
   if (error || !cluster || !workspaceData) return (
@@ -131,7 +154,16 @@ export default function ClusterDetailView() {
           </div>
 
           <div className="sidebar-group">
-            <span className="sidebar-group-title">Recommended Target</span>
+            <div className="sidebar-group-title-row">
+              <span className="sidebar-group-title">Recommended Target</span>
+              <button
+                className="sidebar-edit-btn"
+                title="Change recommended target"
+                onClick={() => setChangeTargetOpen(true)}
+              >
+                <Pencil size={11} />
+              </button>
+            </div>
             {target && (
               <button
                 className={`sidebar-item target-item ${selectedWbId === target.workbook_id ? 'active' : ''}`}
@@ -140,6 +172,9 @@ export default function ClusterDetailView() {
                 <Target size={13} className="target-icon" />
                 <span className="item-name" title={target.workbook_name}>{target.workbook_name}</span>
                 <span className="badge badge-keep">Keep</span>
+                {cluster.target_override_reason && (
+                  <span className="override-badge">Override</span>
+                )}
               </button>
             )}
           </div>
@@ -191,6 +226,19 @@ export default function ClusterDetailView() {
             </div>
           )}
 
+          {/* Change Target button — when target is selected */}
+          {isTargetSelected && (
+            <div className="compare-toolbar">
+              <button
+                className="compare-dropdown-trigger"
+                onClick={() => setChangeTargetOpen(true)}
+              >
+                <Pencil size={13} />
+                <span>Change Target</span>
+              </button>
+            </div>
+          )}
+
           {/* Panel Content */}
           {isCompareMode ? (
             <MultiComparePanel
@@ -215,6 +263,16 @@ export default function ClusterDetailView() {
         </div>
 
       </div>
+
+      {/* Change Target Modal */}
+      <ChangeTargetModal
+        isOpen={changeTargetOpen}
+        onClose={() => setChangeTargetOpen(false)}
+        onConfirm={handleChangeTargetConfirm}
+        members={cluster.members || []}
+        currentTargetId={cluster.canonical_target_id}
+        loading={changingTarget}
+      />
     </div>
   );
 }

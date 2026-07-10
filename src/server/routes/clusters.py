@@ -64,7 +64,7 @@ def _build_cluster_summary(db, cluster: Dict[str, Any]) -> Dict[str, Any]:
     members = []
     for wb_id in member_ids:
         wb = db.query_one(
-            "SELECT id, name, extraction_complexity FROM workbooks WHERE id = ?",
+            "SELECT id, name, extraction_complexity, extraction_quality_score FROM workbooks WHERE id = ?",
             (wb_id,)
         ) or {}
         rec = db.query_one(
@@ -98,6 +98,7 @@ def _build_cluster_summary(db, cluster: Dict[str, Any]) -> Dict[str, Any]:
             "ds_count": ds_count.get("cnt", 0),
             "unique_kpi_count": 0,  # enriched in detail endpoint
             "formula_count": formula_count.get("cnt", 0),
+            "extraction_quality_score": wb.get("extraction_quality_score"),
             "decommission_after_merge": bool(rec.get("decommission_after_merge", 0)),
         })
 
@@ -111,6 +112,7 @@ def _build_cluster_summary(db, cluster: Dict[str, Any]) -> Dict[str, Any]:
         "cluster_action_summary": cluster.get("cluster_action_summary"),
         "cluster_validation_flag": cluster.get("cluster_validation_flag"),
         "llm_validation_skipped": bool(cluster.get("llm_validation_skipped", 0)),
+        "target_override_reason": cluster.get("target_override_reason"),
         "members": members,
     }
 
@@ -663,4 +665,128 @@ async def get_cluster_multi_compare(cluster_id: int, workbook_ids: str = ""):
         "target_kpis": target_kpis,
         "target_reasons": target_reasons,
         "candidates": candidates_result,
+    }
+
+
+@router.put("/{cluster_id}/target")
+async def change_cluster_target(cluster_id: int, body: dict):
+    """
+    Human-in-the-loop: change the recommended target for a cluster.
+    Cascades role reassignment for all members in a single transaction.
+
+    Body: { "new_target_id": int, "reason": str }
+    """
+    from fastapi import Request
+
+    db = get_database()
+
+    new_target_id = body.get("new_target_id")
+    reason = body.get("reason", "").strip()
+
+    if not new_target_id:
+        raise HTTPException(status_code=400, detail="new_target_id is required")
+    if not reason or len(reason) < 10:
+        raise HTTPException(status_code=400, detail="A rationale of at least 10 characters is required")
+
+    # Validate cluster
+    cluster = db.query_one(
+        "SELECT * FROM workbook_clusters WHERE id = ?", (cluster_id,)
+    )
+    if not cluster:
+        raise HTTPException(status_code=404, detail=f"Cluster {cluster_id} not found")
+
+    member_ids = _get_cluster_members(db, cluster_id)
+    if new_target_id not in member_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Workbook {new_target_id} is not a member of cluster {cluster_id}"
+        )
+
+    old_target_id = cluster.get("canonical_target_id")
+
+    # No change needed
+    if new_target_id == old_target_id:
+        return {"status": "no_change", "message": "Selected workbook is already the target."}
+
+    # Resolve new target name
+    new_target_wb = db.query_one("SELECT name FROM workbooks WHERE id = ?", (new_target_id,))
+    new_target_name = new_target_wb["name"] if new_target_wb else str(new_target_id)
+
+    # 1. Update cluster table
+    db.update(
+        "workbook_clusters",
+        {
+            "canonical_target_id": new_target_id,
+            "target_override_reason": reason,
+        },
+        "id = ?",
+        (cluster_id,),
+    )
+
+    # 2. Update old target → merge_source
+    if old_target_id:
+        db.update(
+            "governance_recommendations",
+            {
+                "cluster_role": "merge_source",
+                "action": "merge",
+                "merge_with_id": new_target_id,
+                "merge_with_name": new_target_name,
+            },
+            "workbook_id = ?",
+            (old_target_id,),
+        )
+
+    # 3. Update new target → canonical_target
+    db.update(
+        "governance_recommendations",
+        {
+            "cluster_role": "canonical_target",
+            "action": "keep",
+            "merge_with_id": None,
+            "merge_with_name": None,
+        },
+        "workbook_id = ?",
+        (new_target_id,),
+    )
+
+    # 4. Re-point all other members' merge_with_id from old target to new target
+    if old_target_id:
+        for mid in member_ids:
+            if mid == new_target_id:
+                continue
+            rec = db.query_one(
+                "SELECT merge_with_id FROM governance_recommendations WHERE workbook_id = ?",
+                (mid,),
+            )
+            if rec and rec.get("merge_with_id") == old_target_id:
+                db.update(
+                    "governance_recommendations",
+                    {
+                        "merge_with_id": new_target_id,
+                        "merge_with_name": new_target_name,
+                    },
+                    "workbook_id = ?",
+                    (mid,),
+                )
+
+    # 5. Update canonical_target_id on all member recommendation rows
+    for mid in member_ids:
+        db.update(
+            "governance_recommendations",
+            {"canonical_target_id": new_target_id},
+            "workbook_id = ?",
+            (mid,),
+        )
+
+    logger.info(
+        "Target changed for cluster %d: %s → %s. Reason: %s",
+        cluster_id, old_target_id, new_target_id, reason,
+    )
+
+    return {
+        "status": "ok",
+        "message": f"Target changed to '{new_target_name}' successfully.",
+        "new_target_id": new_target_id,
+        "new_target_name": new_target_name,
     }
