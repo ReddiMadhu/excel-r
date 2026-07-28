@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import ReactDOM from 'react-dom';
 import {
   GitMerge, Trash2, CheckCircle, TrendingUp, Sparkles, Mail, X, FileDown,
   Star, Send, Target, AlertTriangle, ChevronDown, ChevronRight,
@@ -254,174 +255,287 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
     const type = data.type;
     const sourceKpis = data.source_kpis || [];
     const reasons = cleanReasons(rec.reasons);
+    const sharedKpisLocal = data.shared_kpis || [];
+    const covLocal = data.kpi_coverage;
 
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageHeight = 297;
     const pageWidth = 210;
-    const marginX = 20;
+    const marginX = 18;
     const contentWidth = pageWidth - (marginX * 2);
     let y = 20;
 
+    const typeConfig = {
+      merge: { title: 'Merge Review' },
+      decommission: { title: 'Decommission Governance Review' },
+      keep: { title: data.cluster_role === 'canonical_target' ? 'Recommended Target' : 'Keep Review' },
+    };
+    const cfgTitle = (typeConfig[type] || typeConfig.keep).title;
+
     const checkPageBreak = (neededHeight) => {
-      if (y + neededHeight > pageHeight - 20) {
+      if (y + neededHeight > pageHeight - 22) {
         doc.addPage();
-        y = 20;
         doc.setFont('helvetica', 'normal');
-        doc.setFontSize(8);
-        doc.setTextColor(150, 150, 150);
-        doc.text(`BI Governance Report: ${rec.workbook_name}`, marginX, 10);
+        doc.setFontSize(7);
+        doc.setTextColor(160, 170, 180);
+        doc.text(`${rec.workbook_name} \u2014 ${cfgTitle}`, marginX, 10);
+        doc.setDrawColor(226, 232, 240);
         doc.line(marginX, 12, pageWidth - marginX, 12);
-        y = 20;
+        y = 18;
       }
     };
 
-    const addParagraph = (text, fontSize = 10, isBold = false, color = [51, 65, 85]) => {
+    const addParagraph = (text, fontSize = 9.5, isBold = false, color = [51, 65, 85]) => {
       doc.setFont('helvetica', isBold ? 'bold' : 'normal');
       doc.setFontSize(fontSize);
       doc.setTextColor(color[0], color[1], color[2]);
       const lines = doc.splitTextToSize(text, contentWidth);
-      const lineHeight = fontSize * 0.45;
+      const lineHeight = fontSize * 0.42;
       lines.forEach(line => {
-        checkPageBreak(lineHeight);
+        checkPageBreak(lineHeight + 1);
         doc.text(line, marginX, y);
         y += lineHeight;
       });
-      y += 2;
+      y += 1.5;
     };
+
+    const addSectionTitle = (title) => {
+      checkPageBreak(14);
+      y += 3;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
+      doc.text(title, marginX, y);
+      y += 1.5;
+      doc.setDrawColor(200, 210, 220);
+      doc.line(marginX, y, pageWidth - marginX, y);
+      y += 4;
+    };
+
+    const addBullet = (text, bulletColor = [100, 116, 139]) => {
+      checkPageBreak(7);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.setTextColor(bulletColor[0], bulletColor[1], bulletColor[2]);
+      doc.text('\u2022', marginX + 2, y);
+      doc.setTextColor(51, 65, 85);
+      const lines = doc.splitTextToSize(text, contentWidth - 8);
+      const lh = 9.5 * 0.42;
+      lines.forEach((line, idx) => {
+        if (idx > 0) checkPageBreak(lh + 1);
+        doc.text(line, marginX + 7, y);
+        if (idx < lines.length - 1) y += lh;
+      });
+      y += lh + 1.5;
+    };
+
+    // Determine action label & color
+    let actionText = '';
+    let actionColor = [100, 116, 139];
+    if (type === 'merge') {
+      actionText = `Consolidation Merge \u2192 ${rec.merge_with_name || 'Target Report'}`;
+      actionColor = [217, 119, 6];
+    } else if (type === 'decommission') {
+      actionText = 'Decommission / Archive';
+      actionColor = [225, 29, 72];
+    } else {
+      actionText = 'Keep';
+      actionColor = [5, 150, 105];
+    }
 
     // Title banner
     doc.setFillColor(30, 41, 59);
-    doc.rect(0, 0, pageWidth, 40, 'F');
+    doc.rect(0, 0, pageWidth, 36, 'F');
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(18);
+    doc.setFontSize(16);
     doc.setTextColor(255, 255, 255);
-    doc.text('BI Governance & Rationalization Report', marginX, 18);
+    doc.text(cfgTitle, marginX, 16);
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.setTextColor(226, 232, 240);
+    doc.setFontSize(8.5);
+    doc.setTextColor(200, 210, 225);
     const dateStr = new Date().toLocaleDateString('en-US', {
       year: 'numeric', month: 'long', day: 'numeric',
       hour: '2-digit', minute: '2-digit'
     });
-    doc.text(`Generated on ${dateStr} | System: Antigravity Governance Engine`, marginX, 26);
-    y = 52;
+    doc.text(`Generated: ${dateStr}`, marginX, 24);
+    y = 44;
 
     // Report card
-    checkPageBreak(25);
-    doc.setFillColor(248, 250, 252);
-    doc.setDrawColor(226, 232, 240);
-    doc.rect(marginX, y, contentWidth, 24, 'FD');
+    checkPageBreak(28);
+    doc.setFillColor(245, 247, 250);
+    doc.setDrawColor(210, 218, 228);
+    doc.roundedRect(marginX, y, contentWidth, 22, 2, 2, 'FD');
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
+    doc.setFontSize(10.5);
     doc.setTextColor(30, 41, 59);
-    doc.text(`Report name: ${rec.workbook_name}`, marginX + 6, y + 8);
-
-    let actionText = '';
-    let actionColor = [100, 116, 139];
-    if (type === 'merge') {
-      actionText = `CONSOLIDATION MERGE (Merge into: ${rec.merge_with_name || 'Target Report'})`;
-      actionColor = [217, 119, 6];
-    } else if (type === 'decommission') {
-      actionText = 'DECOMMISSION / ARCHIVE';
-      actionColor = [225, 29, 72];
-    } else {
-      actionText = 'KEEP';
-      actionColor = [5, 150, 105];
-    }
+    doc.text(`Report: ${rec.workbook_name}`, marginX + 5, y + 8);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
+    doc.setFontSize(9.5);
     doc.setTextColor(actionColor[0], actionColor[1], actionColor[2]);
-    doc.text(`Recommended Action: ${actionText}`, marginX + 6, y + 16);
-    y += 32;
+    doc.text(`Recommended Action: ${actionText}`, marginX + 5, y + 16);
+    y += 28;
+
+    // Overlap Scores Summary
+    if ((type === 'merge' || type === 'decommission') && covLocal) {
+      addSectionTitle('Overlap Analysis Summary');
+      const colW = contentWidth / 3;
+      const scoreData = [
+        { label: 'KPI Overlap', val: `${leftKpiCoverage || 0}%`, note: `${covLocal.shared_count || 0} of ${leftKpis?.length || 0} KPIs` },
+        { label: 'Data Source Overlap', val: `${leftDsCoverage || 0}%`, note: `${covLocal.ds_shared_count || 0} of ${leftDsCount || '?'} sources` },
+        { label: 'Unique KPIs', val: `${leftUniquePct || 0}%`, note: `${leftOnlyKpis?.length || 0} unique` },
+      ];
+      const boxY = y;
+      scoreData.forEach((s, idx) => {
+        const bx = marginX + idx * colW;
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(220, 225, 235);
+        doc.roundedRect(bx, boxY, colW - 3, 22, 1.5, 1.5, 'FD');
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text(s.label, bx + 4, boxY + 6);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(14);
+        doc.setTextColor(30, 41, 59);
+        doc.text(s.val, bx + 4, boxY + 15);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(120, 130, 145);
+        doc.text(s.note, bx + 4, boxY + 20);
+      });
+      y = boxY + 28;
+    }
 
     // Justification
     if (rec.llm_justification) {
-      checkPageBreak(15);
-      addParagraph('Executive Justification', 12, true, [15, 23, 42]);
-      doc.setDrawColor(226, 232, 240);
-      doc.line(marginX, y - 1, pageWidth - marginX, y - 1);
-      y += 3;
-      addParagraph(rec.llm_justification, 10, false, [51, 65, 85]);
-      y += 4;
-    }
-
-    // Rationale
-    if (reasons.length > 0) {
-      checkPageBreak(15);
-      const titleText = type === 'decommission' ? 'Cleanliness Violations' : 'Governance Rationale';
-      addParagraph(titleText, 12, true, [15, 23, 42]);
-      doc.setDrawColor(226, 232, 240);
-      doc.line(marginX, y - 1, pageWidth - marginX, y - 1);
-      y += 3;
-      reasons.forEach(reason => {
-        checkPageBreak(8);
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(actionColor[0], actionColor[1], actionColor[2]);
-        doc.text('•', marginX + 2, y);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(10);
-        doc.setTextColor(51, 65, 85);
-        const lines = doc.splitTextToSize(reason, contentWidth - 8);
-        const lineHeight = 10 * 0.45;
-        lines.forEach((line, index) => {
-          if (index > 0) checkPageBreak(lineHeight);
-          doc.text(line, marginX + 6, y);
-          if (index < lines.length - 1) y += lineHeight;
-        });
-        y += lineHeight + 2;
-      });
+      addSectionTitle('Executive Justification');
+      addParagraph(rec.llm_justification, 9.5, false, [51, 65, 85]);
       y += 2;
     }
 
+    // Source Report Details
+    addSectionTitle(type === 'merge' ? `Source \u2014 Merge Candidate: ${leftRec?.workbook_name || rec.workbook_name}` : type === 'decommission' ? `Decommission Candidate: ${leftRec?.workbook_name || rec.workbook_name}` : `Report: ${leftRec?.workbook_name || rec.workbook_name}`);
+
+    if ((type === 'merge' || type === 'decommission') && rightRec && covLocal) {
+      addParagraph(`Compared with: ${rightRec.workbook_name}`, 9, true, [71, 85, 105]);
+      addParagraph(`KPI Overlap: ${leftKpiCoverage || 0}%   |   DS Overlap: ${leftDsCoverage || 0}%   |   Unique KPIs: ${leftUniquePct || 0}%`, 8.5, false, [71, 85, 105]);
+      y += 2;
+    }
+
+    // Governance Rationale
+    if (reasons.length > 0) {
+      addParagraph(type === 'decommission' ? 'Cleanliness Violations:' : 'Governance Rationale:', 9.5, true, [30, 41, 59]);
+      reasons.forEach(r => addBullet(r, actionColor));
+      y += 1;
+    }
+
+    // Source KPIs
+    if (sharedKpisLocal.length > 0 || (leftOnlyKpis && leftOnlyKpis.length > 0)) {
+      addParagraph(`KPIs (${leftKpis?.length || sourceKpis.length} total):`, 9.5, true, [30, 41, 59]);
+      sharedKpisLocal.forEach(k => addBullet(`${k}  [SHARED]`, [5, 150, 105]));
+      (leftOnlyKpis || []).forEach(k => addBullet(k, [100, 116, 139]));
+      y += 2;
+    }
+
+    // Target Report Details
+    if ((type === 'merge' || (type === 'decommission' && rec.merge_with_name)) && rightRec && covLocal) {
+      addSectionTitle(type === 'merge' ? `Target \u2014 Consolidation Destination: ${rightRec.workbook_name}` : `Retain Target: ${rightRec.workbook_name}`);
+      addParagraph(`Compared with: ${leftRec?.workbook_name || rec.workbook_name}`, 9, true, [71, 85, 105]);
+      addParagraph(`KPI Overlap: ${rightKpiCoverage || 0}%   |   DS Overlap: ${rightDsCoverage || 0}%   |   Unique KPIs: ${rightUniquePct || 0}%`, 8.5, false, [71, 85, 105]);
+      y += 2;
+
+      if (rightReasons && rightReasons.length > 0) {
+        addParagraph('Target Rationale:', 9.5, true, [30, 41, 59]);
+        rightReasons.forEach(r => addBullet(r, [5, 150, 105]));
+        y += 1;
+      }
+
+      if (sharedKpisLocal.length > 0 || (rightOnlyKpis && rightOnlyKpis.length > 0)) {
+        addParagraph(`KPIs (${rightKpis?.length || 0} total):`, 9.5, true, [30, 41, 59]);
+        sharedKpisLocal.forEach(k => addBullet(`${k}  [SHARED]`, [5, 150, 105]));
+        (rightOnlyKpis || []).forEach(k => addBullet(k, [100, 116, 139]));
+        y += 2;
+      }
+    }
+
     // Audience
-    checkPageBreak(15);
-    addParagraph('Affected Audience & Stakeholders', 12, true, [15, 23, 42]);
-    doc.setDrawColor(226, 232, 240);
-    doc.line(marginX, y - 1, pageWidth - marginX, y - 1);
-    y += 3;
+    addSectionTitle('Affected Audience & Stakeholders');
     const audienceGroups = rec.user_groups && rec.user_groups.length > 0
       ? rec.user_groups.join(', ')
       : 'No specific audience groups registered.';
-    addParagraph(`Stakeholder Groups: ${audienceGroups}`, 10, false, [51, 65, 85]);
-    y += 4;
+    addParagraph(audienceGroups, 9.5, false, [51, 65, 85]);
+    y += 2;
 
-    // KPIs
-    checkPageBreak(15);
-    addParagraph('Mapped Key Performance Indicators (KPIs)', 12, true, [15, 23, 42]);
-    doc.setDrawColor(226, 232, 240);
-    doc.line(marginX, y - 1, pageWidth - marginX, y - 1);
-    y += 3;
+    // KPIs Full Catalog
+    addSectionTitle('Mapped Key Performance Indicators (KPIs)');
     if (sourceKpis.length > 0) {
-      addParagraph(`Total Mapped KPIs: ${sourceKpis.length}`, 10, true, [30, 41, 59]);
-      addParagraph(sourceKpis.join(', '), 9, false, [71, 85, 105]);
+      addParagraph(`Total Mapped KPIs: ${sourceKpis.length}`, 9.5, true, [30, 41, 59]);
+      addParagraph(sourceKpis.join(', '), 8.5, false, [71, 85, 105]);
     } else {
-      addParagraph('No registered KPIs detected for this report.', 10, false, [100, 116, 139]);
+      addParagraph('No registered KPIs detected for this report.', 9.5, false, [120, 130, 145]);
     }
-    y += 4;
+    y += 2;
 
     // DB Lineage
-    checkPageBreak(15);
-    addParagraph('Database Lineage & Source Schema Connections', 12, true, [15, 23, 42]);
-    doc.setDrawColor(226, 232, 240);
-    doc.line(marginX, y - 1, pageWidth - marginX, y - 1);
-    y += 3;
+    addSectionTitle('Database Lineage & Source Tables');
     const sourceTablesList = rec.tables || [];
     if (sourceTablesList.length > 0) {
-      addParagraph(`Referenced Data Tables: ${sourceTablesList.length}`, 10, true, [30, 41, 59]);
-      addParagraph(sourceTablesList.join(', '), 9, false, [71, 85, 105]);
+      addParagraph(`Referenced Data Tables: ${sourceTablesList.length}`, 9.5, true, [30, 41, 59]);
+      addParagraph(sourceTablesList.join(', '), 8.5, false, [71, 85, 105]);
     } else {
-      addParagraph('No direct database lineage references detected.', 10, false, [100, 116, 139]);
+      addParagraph('No direct database lineage references detected.', 9.5, false, [120, 130, 145]);
+    }
+    y += 2;
+
+    // Common Data Sources
+    if ((type === 'merge' || type === 'decommission') && rec.common_datasources && rec.common_datasources.length > 0) {
+      addSectionTitle('Common Data Sources');
+      addParagraph(`${rec.common_datasources.length} shared data sources:`, 9.5, true, [30, 41, 59]);
+      addParagraph(rec.common_datasources.join(', '), 8.5, false, [71, 85, 105]);
+      y += 2;
     }
 
-    // Footer
+    // Common KPIs
+    if ((type === 'merge' || type === 'decommission') && rec.common_kpis && rec.common_kpis.length > 0) {
+      addSectionTitle('Common KPIs Between Reports');
+      addParagraph(`${rec.common_kpis.length} shared KPIs:`, 9.5, true, [30, 41, 59]);
+      addParagraph(rec.common_kpis.join(', '), 8.5, false, [71, 85, 105]);
+      y += 2;
+    }
+
+    // Sheet Names
+    if (rec.sheet_names && rec.sheet_names.length > 0) {
+      addSectionTitle('Sheet Names');
+      addParagraph(rec.sheet_names.join(', '), 9, false, [71, 85, 105]);
+      y += 2;
+    }
+
+    // Quality Scores
+    if (rec.scores) {
+      addSectionTitle('Quality & Extraction Scores');
+      const s = rec.scores;
+      const scoreLines = [];
+      if (s.extraction_quality_score != null) scoreLines.push(`Extraction Quality: ${(s.extraction_quality_score * 100).toFixed(0)}%`);
+      if (s.extraction_complexity != null) scoreLines.push(`Extraction Complexity: ${s.extraction_complexity}`);
+      if (s.structural_risk != null) scoreLines.push(`Structural Risk: ${s.structural_risk}`);
+      if (s.computation_depth != null) scoreLines.push(`Computation Depth: ${s.computation_depth}`);
+      if (rec.kpi_overlap_score != null) scoreLines.push(`KPI Overlap Score: ${(rec.kpi_overlap_score * 100).toFixed(1)}%`);
+      if (rec.datasource_overlap_score != null) scoreLines.push(`DS Overlap Score: ${(rec.datasource_overlap_score * 100).toFixed(1)}%`);
+      if (rec.uniqueness_score != null) scoreLines.push(`Uniqueness: ${(rec.uniqueness_score * 100).toFixed(1)}%`);
+      if (scoreLines.length > 0) {
+        addParagraph(scoreLines.join('   |   '), 8.5, false, [71, 85, 105]);
+      }
+      y += 2;
+    }
+
+    // Page numbers
     const pageCount = doc.internal.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
-      doc.setTextColor(148, 163, 184);
-      doc.text(`Page ${i} of ${pageCount}`, pageWidth - marginX - 15, pageHeight - 10);
-      doc.text('CONFIDENTIAL - FOR INTERNAL BI GOVERNANCE USE ONLY', marginX, pageHeight - 10);
+      doc.setFontSize(7.5);
+      doc.setTextColor(160, 170, 185);
+      doc.text(`Page ${i} of ${pageCount}`, pageWidth - marginX - 18, pageHeight - 8);
     }
 
     const cleanName = rec.workbook_name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
@@ -832,8 +946,8 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
         </div>
       </div>
 
-      {/* Email dispatch Modal */}
-      {emailModalOpen && (
+      {/* Email dispatch Modal — rendered via Portal to escape CSS transform containing block */}
+      {emailModalOpen && ReactDOM.createPortal(
         <div className="email-modal-backdrop" onClick={() => setEmailModalOpen(false)}>
           <div className="email-modal-card" style={{ maxWidth: '640px', width: '90%' }} onClick={(e) => e.stopPropagation()}>
             <button className="email-modal-close" onClick={() => setEmailModalOpen(false)}>
@@ -938,7 +1052,8 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

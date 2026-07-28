@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import ReactDOM from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle, GitMerge, Trash2, AlertCircle, Search,
@@ -454,8 +455,8 @@ export default function RationalizationView() {
         </div>
       )}
 
-      {/* Email dispatch Modal */}
-      {emailModalOpen && (
+      {/* Email dispatch Modal — rendered via Portal to escape CSS transform containing block */}
+      {emailModalOpen && ReactDOM.createPortal(
         <div className="email-modal-backdrop" onClick={() => setEmailModalOpen(false)}>
           <div className="email-modal-card" onClick={(e) => e.stopPropagation()}>
             <button className="email-modal-close" onClick={() => setEmailModalOpen(false)}>
@@ -535,7 +536,8 @@ export default function RationalizationView() {
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>
