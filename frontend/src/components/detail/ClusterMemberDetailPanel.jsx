@@ -278,7 +278,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(7);
         doc.setTextColor(160, 170, 180);
-        doc.text(`${rec.workbook_name} \u2014 ${cfgTitle}`, marginX, 10);
+        doc.text(`${rec.workbook_name} - ${cfgTitle}`, marginX, 10);
         doc.setDrawColor(226, 232, 240);
         doc.line(marginX, 12, pageWidth - marginX, 12);
         y = 18;
@@ -317,7 +317,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(9.5);
       doc.setTextColor(bulletColor[0], bulletColor[1], bulletColor[2]);
-      doc.text('\u2022', marginX + 2, y);
+      doc.text('-', marginX + 2, y);
       doc.setTextColor(51, 65, 85);
       const lines = doc.splitTextToSize(text, contentWidth - 8);
       const lh = 9.5 * 0.42;
@@ -333,7 +333,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
     let actionText = '';
     let actionColor = [100, 116, 139];
     if (type === 'merge') {
-      actionText = `Consolidation Merge \u2192 ${rec.merge_with_name || 'Target Report'}`;
+      actionText = `Consolidation Merge -> ${rec.merge_with_name || 'Target Report'}`;
       actionColor = [217, 119, 6];
     } else if (type === 'decommission') {
       actionText = 'Decommission / Archive';
@@ -414,7 +414,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
     }
 
     // Source Report Details
-    addSectionTitle(type === 'merge' ? `Source \u2014 Merge Candidate: ${leftRec?.workbook_name || rec.workbook_name}` : type === 'decommission' ? `Decommission Candidate: ${leftRec?.workbook_name || rec.workbook_name}` : `Report: ${leftRec?.workbook_name || rec.workbook_name}`);
+    addSectionTitle(type === 'merge' ? `Source - Merge Candidate: ${leftRec?.workbook_name || rec.workbook_name}` : type === 'decommission' ? `Decommission Candidate: ${leftRec?.workbook_name || rec.workbook_name}` : `Report: ${leftRec?.workbook_name || rec.workbook_name}`);
 
     if ((type === 'merge' || type === 'decommission') && rightRec && covLocal) {
       addParagraph(`Compared with: ${rightRec.workbook_name}`, 9, true, [71, 85, 105]);
@@ -439,7 +439,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
 
     // Target Report Details
     if ((type === 'merge' || (type === 'decommission' && rec.merge_with_name)) && rightRec && covLocal) {
-      addSectionTitle(type === 'merge' ? `Target \u2014 Consolidation Destination: ${rightRec.workbook_name}` : `Retain Target: ${rightRec.workbook_name}`);
+      addSectionTitle(type === 'merge' ? `Target - Consolidation Destination: ${rightRec.workbook_name}` : `Retain Target: ${rightRec.workbook_name}`);
       addParagraph(`Compared with: ${leftRec?.workbook_name || rec.workbook_name}`, 9, true, [71, 85, 105]);
       addParagraph(`KPI Overlap: ${rightKpiCoverage || 0}%   |   DS Overlap: ${rightDsCoverage || 0}%   |   Unique KPIs: ${rightUniquePct || 0}%`, 8.5, false, [71, 85, 105]);
       y += 2;
