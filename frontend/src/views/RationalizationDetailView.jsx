@@ -275,7 +275,7 @@ export default function RationalizationDetailView() {
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(7);
         doc.setTextColor(160, 170, 180);
-        doc.text(`${rec.workbook_name} — ${config.title}`, marginX, 10);
+        doc.text(`${rec.workbook_name} - ${config.title}`, marginX, 10);
         doc.setDrawColor(226, 232, 240);
         doc.line(marginX, 12, pageWidth - marginX, 12);
         y = 18;
@@ -314,7 +314,7 @@ export default function RationalizationDetailView() {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(9.5);
       doc.setTextColor(bulletColor[0], bulletColor[1], bulletColor[2]);
-      doc.text('•', marginX + 2, y);
+      doc.text('-', marginX + 2, y);
       doc.setTextColor(51, 65, 85);
       const lines = doc.splitTextToSize(text, contentWidth - 8);
       const lh = 9.5 * 0.42;
@@ -330,7 +330,7 @@ export default function RationalizationDetailView() {
     let actionText = '';
     let actionColor = [100, 116, 139];
     if (type === 'merge') {
-      actionText = `Consolidation Merge → ${rec.merge_with_name || 'Target Report'}`;
+      actionText = `Consolidation Merge -> ${rec.merge_with_name || 'Target Report'}`;
       actionColor = [217, 119, 6];
     } else if (type === 'decommission') {
       actionText = 'Decommission / Archive';
@@ -414,7 +414,7 @@ export default function RationalizationDetailView() {
     }
 
     // ── Source Report Column ──
-    addSectionTitle(type === 'merge' ? `Source — Merge Candidate: ${leftRec.workbook_name}` : type === 'decommission' ? `Decommission Candidate: ${leftRec.workbook_name}` : `Report: ${leftRec.workbook_name}`);
+    addSectionTitle(type === 'merge' ? `Source - Merge Candidate: ${leftRec.workbook_name}` : type === 'decommission' ? `Decommission Candidate: ${leftRec.workbook_name}` : `Report: ${leftRec.workbook_name}`);
 
     if (type === 'merge' || type === 'decommission') {
       addParagraph(`Compared with: ${rightRec ? rightRec.workbook_name : 'N/A'}`, 9, true, [71, 85, 105]);
@@ -449,7 +449,7 @@ export default function RationalizationDetailView() {
 
     // ── Target Report Column (for merge/decommission) ──
     if ((type === 'merge' || (type === 'decommission' && rec.merge_with_name)) && rightRec) {
-      addSectionTitle(type === 'merge' ? `Target — Consolidation Destination: ${rightRec.workbook_name}` : `Retain Target: ${rightRec.workbook_name}`);
+      addSectionTitle(type === 'merge' ? `Target - Consolidation Destination: ${rightRec.workbook_name}` : `Retain Target: ${rightRec.workbook_name}`);
 
       addParagraph(`Compared with: ${leftRec.workbook_name}`, 9, true, [71, 85, 105]);
       addParagraph(`KPI Overlap: ${rightKpiCoverage}% (${sharedCount} of ${rightTotalKpis} KPIs)   |   DS Overlap: ${rightDsCoverage}%   |   Unique KPIs: ${rightUniquePct}% (${rightOnlyKpis.length})`, 8.5, false, [71, 85, 105]);
