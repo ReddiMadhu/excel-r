@@ -4,6 +4,11 @@ Result Cache — Persistent file-based cache for extracted workbook JSON.
 Stores JSON output files keyed by MD5 hash in data/cache/extractions/.
 This cache survives DELETE /api/data/all so that re-uploading the same
 Excel files skips the heavy extraction pipeline entirely.
+
+IMPORTANT: ExtractionService currently does NOT call get() — full re-parse
+is always performed. If ResultCache is re-wired into extract, the cache key
+MUST include LINEAGE_SCHEMA_VERSION from formula_lineage so stale JSON from
+pre-semantic-lineage builds cannot drive rationalization.
 """
 import json
 import logging
@@ -13,6 +18,11 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+try:
+    from src.parsers.formula_lineage import LINEAGE_SCHEMA_VERSION
+except Exception:
+    LINEAGE_SCHEMA_VERSION = "unknown"
+
 # Default cache directory (sibling to data/output)
 DEFAULT_CACHE_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "cache", "extractions")
@@ -20,15 +30,16 @@ DEFAULT_CACHE_DIR = os.path.abspath(
 
 
 class ResultCache:
-    """File-based cache for extracted workbook JSON, keyed by MD5 hash."""
+    """File-based cache for extracted workbook JSON, keyed by MD5 hash + lineage schema."""
 
     def __init__(self, cache_dir: Optional[str] = None):
         self.cache_dir = os.path.abspath(cache_dir or DEFAULT_CACHE_DIR)
         os.makedirs(self.cache_dir, exist_ok=True)
 
     def _path_for(self, md5_hash: str) -> str:
-        """Return the cache file path for a given MD5 hash."""
-        return os.path.join(self.cache_dir, f"{md5_hash}.json")
+        """Return the cache file path for a given MD5 hash (schema-versioned)."""
+        safe_ver = str(LINEAGE_SCHEMA_VERSION).replace("/", "_").replace("\\", "_")
+        return os.path.join(self.cache_dir, f"{md5_hash}.{safe_ver}.json")
 
     def get(self, md5_hash: str) -> Optional[Dict[str, Any]]:
         """

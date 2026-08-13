@@ -291,12 +291,40 @@ def compile_workbook_scoped(
             return None
 
         t0 = time.perf_counter()
+        timeout_s = int(os.getenv("FORMULAS_COMPILE_TIMEOUT", "10"))
         try:
+            import concurrent.futures
             import formulas
 
-            model = formulas.ExcelModel()
-            model.from_ranges(*range_refs)
-            model.finish(complete=False, assemble=True)
+            def _do_compile():
+                model = formulas.ExcelModel()
+                model.from_ranges(*range_refs)
+                model.finish(complete=False, assemble=True)
+                return model
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(_do_compile)
+                try:
+                    model = fut.result(timeout=timeout_s)
+                except concurrent.futures.TimeoutError:
+                    elapsed = time.perf_counter() - t0
+                    print(
+                        f"Warning: formulas library compile timed out after {timeout_s}s — "
+                        f"falling back to custom parser (comparison_mode must degrade)."
+                    )
+                    log_step(
+                        "formulas_compile",
+                        "scoped_summary_sheets",
+                        elapsed,
+                        sheets=",".join(sorted(summary_sheets)),
+                        scoped_formulas=scoped_count,
+                        table_ranges=True,
+                        data_row_limit=TABLE_DATA_ROW_LIMIT,
+                        compile_skipped="timeout",
+                        timeout_s=timeout_s,
+                    )
+                    return None
+
             elapsed = time.perf_counter() - t0
             sample_ref = range_refs[0]
             if len(sample_ref) > 80:
@@ -484,30 +512,57 @@ def resolve_dependency_to_column(dep_ref, raw_column_maps):
     return None
 
 
+def _custom_parser_handles(formula_str: str) -> bool:
+    """True when the custom parser fully understands this formula family."""
+    if not formula_str:
+        return False
+    fu = str(formula_str).upper().lstrip("=")
+    # Strip common wrappers
+    for w in ("IFERROR(", "IFNA(", "ISERROR("):
+        if fu.startswith(w):
+            fu = fu[len(w):]
+            break
+    return any(
+        fn in fu
+        for fn in ("SUMIFS(", "COUNTIFS(", "COUNTIF(", "SUM(", "AVERAGE(", "SUMPRODUCT(")
+    ) or bool(re.search(r"[+\-*/]", fu))
+
+
 def _parse_formula_with_library_impl(xl_model, sheet_name, cell_ref, formula_str,
                                      current_row, ws_val, raw_column_maps, 
                                      table_col_mapping, table_name, ws_form=None,
                                      detected_tables=None):
     """
-    Parse a formula using the formulas library dependency graph.
-    Falls back to custom parsing if the library can't resolve it.
+    Prefer the custom parser for SUMIFS/COUNTIFS/SUM/arithmetic so roles and
+    filters are preserved. Use the formulas library only for unsupported types.
     """
-    deps = get_cell_dependencies(xl_model, sheet_name, cell_ref)
-    
-    if not deps:
-        # Fallback to custom parsing
+    # Always use custom parser when it handles the formula — library path loses roles
+    if _custom_parser_handles(formula_str):
         return parse_formula(
-            formula_str, current_row, ws_val, 
+            formula_str, current_row, ws_val,
             raw_column_maps, table_col_mapping, table_name,
             ws_form,
             detected_tables=detected_tables
         )
-    
-    # Resolve dependencies to column names
+
+    deps = get_cell_dependencies(xl_model, sheet_name, cell_ref) if xl_model is not None else None
+
+    if not deps:
+        result = parse_formula(
+            formula_str, current_row, ws_val,
+            raw_column_maps, table_col_mapping, table_name,
+            ws_form,
+            detected_tables=detected_tables
+        )
+        if result.get("resolved_by") in ("none", "custom_parser") and not result.get("data_source_columns"):
+            result["resolved_by"] = "degraded"
+        return result
+
+    # Library path for unsupported formulas — mark degraded (roles are generic)
     data_source_sheet = ""
     data_source_columns = set()
     formula_source_details = []
-    
+
     for dep in deps:
         resolved = resolve_dependency_to_column(dep, raw_column_maps)
         if resolved and resolved["header"]:
@@ -516,15 +571,14 @@ def _parse_formula_with_library_impl(xl_model, sheet_name, cell_ref, formula_str
             formula_source_details.append({
                 "column_name": resolved["header"],
                 "role": "dependency",
+                "source_sheet": resolved["sheet"],
+                "header_resolved": not str(resolved["header"]).startswith("Col_"),
             })
-    
+
     if data_source_columns:
-        # Successfully resolved via library
-        # Generate a human-readable formula pattern
         formula_pattern = _generate_pattern_from_formula(
             formula_str, ws_val, current_row, raw_column_maps, table_col_mapping
         )
-        
         return {
             "type": "formula_based",
             "formula_pattern": formula_pattern,
@@ -532,11 +586,9 @@ def _parse_formula_with_library_impl(xl_model, sheet_name, cell_ref, formula_str
             "data_source_columns": list(data_source_columns),
             "formula_source_details": formula_source_details,
             "formula_count": 1,
-            "resolved_by": "formulas_library",
+            "resolved_by": "degraded",
         }
-    
-    # Library found dependencies but couldn't map to raw columns
-    # Fall back to custom parsing
+
     return parse_formula(
         formula_str, current_row, ws_val,
         raw_column_maps, table_col_mapping, table_name,
@@ -710,8 +762,11 @@ def parse_sheet_cell_ref(ref_str):
     """
     Parse a reference string like SQL_data!D:D or 'Warehouse Data'!$C:$C or Summary!$A$2 or B6.
     Returns (sheet, col_letter, row_num, is_range) or (None, None, None, False).
+
+    External workbook refs like '[Other.xlsx]Sheet'!A1 return sheet as
+    '[Other.xlsx]Sheet' (caller should detect '[' and mark references_external).
     """
-    # Remove absolute signs
+    # Remove absolute signs for parsing (keep original for external detection)
     clean_ref = ref_str.replace('$', '')
     
     sheet_name = None
@@ -737,21 +792,54 @@ def parse_sheet_cell_ref(ref_str):
     row_num_str = "".join(filter(str.isdigit, cell_part))
     row_num = int(row_num_str) if row_num_str else None
     
-    return sheet_name, col_letter.upper(), row_num, False
+    return sheet_name, col_letter.upper() if col_letter else None, row_num, False
+
+
+def is_external_workbook_ref(ref_str: str) -> bool:
+    """True if the reference points at another workbook ([file.xlsx]...)."""
+    return bool(ref_str) and "[" in str(ref_str) and "]" in str(ref_str)
 
 
 def translate_reference(ref_str, current_row, summary_ws_val, raw_column_maps, table_col_mapping, detected_tables=None):
     """
     Translate a single cell/column reference in a formula to its header/value representation.
+    Returns (repr, header, sheet_name). header may be Col_X when unresolved.
     """
-    sheet_name, col_letter, row_num, is_range = parse_sheet_cell_ref(ref_str)
-    
+    if ref_str is None:
+        return "", None, None
+
+    ref_stripped = str(ref_str).strip()
+
+    # String literal criteria — not a cell reference
+    if (ref_stripped.startswith('"') and ref_stripped.endswith('"')) or (
+        ref_stripped.startswith("'") and ref_stripped.endswith("'") and "!" not in ref_stripped
+    ):
+        return ref_stripped, None, None
+
+    # Concatenated criteria like ">"&A1 — return as-is; classification handles it
+    if "&" in ref_stripped and (
+        ref_stripped.startswith('"') or ref_stripped.startswith("'") or re.match(r'^"[<>=!]', ref_stripped)
+    ):
+        return ref_stripped, None, None
+
+    # External workbook — do not silently invent lineage
+    if is_external_workbook_ref(ref_stripped):
+        sheet_name, col_letter, row_num, _ = parse_sheet_cell_ref(ref_stripped)
+        header = f"Col_{col_letter}" if col_letter else None
+        return str(ref_stripped), header, sheet_name
+
+    sheet_name, col_letter, row_num, is_range = parse_sheet_cell_ref(ref_stripped)
+
+    # Guard: parse_sheet_cell_ref can return garbage letters from non-refs
+    if col_letter and (len(col_letter) > 3 or not col_letter.isalpha()):
+        return ref_stripped, None, None
+
     current_sheet_title = summary_ws_val.title if summary_ws_val else "Summary"
     
     # If referencing a raw data sheet
     if sheet_name and sheet_name in raw_column_maps:
         col_map = raw_column_maps[sheet_name]
-        header = col_map.get(col_letter, f"Col_{col_letter}")
+        header = col_map.get(col_letter, f"Col_{col_letter}") if col_letter else None
         return f"{sheet_name}[{header}]", header, sheet_name
         
     # Resolve the target worksheet dynamically
@@ -768,16 +856,36 @@ def translate_reference(ref_str, current_row, summary_ws_val, raw_column_maps, t
         is_valid_ref = True
         
     if is_valid_ref and col_letter:
-        col_idx = column_index_from_string(col_letter)
+        try:
+            col_idx = column_index_from_string(col_letter)
+        except ValueError:
+            return ref_stripped, None, None
         
-        # Get header name
+        # Get header name — prefer detected header row, not hardcoded row 1/2
         header = f"Col_{col_letter}"
         if ref_sheet_title == current_sheet_title:
             header = table_col_mapping.get(col_idx, f"Col_{col_letter}")
         elif ref_ws:
-            h_val = ref_ws.cell(row=2, column=col_idx).value
-            if not h_val:
+            try:
+                from src.parsers.raw_data_parser import detect_header_row
+                hdr_row = detect_header_row(ref_ws)
+            except Exception:
+                hdr_row = 1
+            h_val = ref_ws.cell(row=hdr_row, column=col_idx).value
+            if not h_val and hdr_row != 1:
                 h_val = ref_ws.cell(row=1, column=col_idx).value
+            # Merged cells: try top-left of merge containing this cell
+            if not h_val and hasattr(ref_ws, "merged_cells"):
+                try:
+                    for merged_range in ref_ws.merged_cells.ranges:
+                        if (merged_range.min_row <= hdr_row <= merged_range.max_row
+                                and merged_range.min_col <= col_idx <= merged_range.max_col):
+                            h_val = ref_ws.cell(
+                                row=merged_range.min_row, column=merged_range.min_col
+                            ).value
+                            break
+                except Exception:
+                    pass
             if h_val:
                 header = str(h_val).strip()
         
@@ -809,7 +917,7 @@ def translate_reference(ref_str, current_row, summary_ws_val, raw_column_maps, t
                 
             return f"{ref_sheet_title}!{col_letter}{row_num} ({val_str})", header, ref_sheet_title
             
-    return ref_str, None, None
+    return ref_stripped, None, None
 
 
 def _parse_formula_impl(formula_str, current_row, summary_ws_val, raw_column_maps, table_col_mapping, table_name, summary_ws_form=None, _depth=0, detected_tables=None):
@@ -858,7 +966,9 @@ def _parse_formula_impl(formula_str, current_row, summary_ws_val, raw_column_map
                     data_source_sheet = sum_sheet
                 formula_source_details.append({
                     "column_name": sum_hdr,
-                    "role": "sum_range"
+                    "role": "sum_range",
+                    "source_sheet": sum_sheet or data_source_sheet,
+                    "header_resolved": not str(sum_hdr).startswith("Col_"),
                 })
                 
             criterias = []
@@ -885,23 +995,30 @@ def _parse_formula_impl(formula_str, current_row, summary_ws_val, raw_column_map
 
                 col_label = crit_range_hdr if crit_range_hdr else crit_range_repr
 
-                # Classify using $ pattern — the definitive way to detect GROUP BY vs WHERE
+                # Classify using reference semantics (not $ alone)
                 from src.parsers.formula_lineage import classify_criteria_ref, extract_filter_value
                 ref_type = classify_criteria_ref(crit_val_ref, current_row)
+                src_sheet = crit_sheet or data_source_sheet
+                header_ok = bool(crit_range_hdr) and not str(crit_range_hdr).startswith("Col_")
 
                 if ref_type == 'group_by_key':
                     criterias.append(col_label)
                     formula_source_details.append({
                         "column_name": col_label,
-                        "role": "group_by_key"
+                        "role": "group_by_key",
+                        "source_sheet": src_sheet,
+                        "header_resolved": header_ok,
                     })
                 else:
-                    fv = extract_filter_value(crit_val_ref, crit_val_repr, summary_ws_val)
-                    filters.append(f"{col_label} = {fv}")
+                    fv, op = extract_filter_value(crit_val_ref, crit_val_repr, summary_ws_val, return_operator=True)
+                    filters.append(f"{col_label} {op} {fv}")
                     formula_source_details.append({
                         "column_name": col_label,
                         "role": "static_filter",
-                        "filter_value": fv
+                        "filter_value": fv,
+                        "operator": op,
+                        "source_sheet": src_sheet,
+                        "header_resolved": header_ok,
                     })
 
             is_negative = formula_str.strip().startswith('=-1*') or formula_str.strip().startswith('=-')
@@ -954,20 +1071,27 @@ def _parse_formula_impl(formula_str, current_row, summary_ws_val, raw_column_map
 
                 from src.parsers.formula_lineage import classify_criteria_ref, extract_filter_value
                 ref_type = classify_criteria_ref(crit_val_ref, current_row)
+                src_sheet = crit_sheet or data_source_sheet
+                header_ok = bool(crit_range_hdr) and not str(crit_range_hdr).startswith("Col_")
 
                 if ref_type == 'group_by_key':
                     criterias.append(col_label)
                     formula_source_details.append({
                         "column_name": col_label,
-                        "role": "group_by_key"
+                        "role": "group_by_key",
+                        "source_sheet": src_sheet,
+                        "header_resolved": header_ok,
                     })
                 else:
-                    fv = extract_filter_value(crit_val_ref, crit_val_repr, summary_ws_val)
-                    filters.append(f"{col_label} = {fv}")
+                    fv, op = extract_filter_value(crit_val_ref, crit_val_repr, summary_ws_val, return_operator=True)
+                    filters.append(f"{col_label} {op} {fv}")
                     formula_source_details.append({
                         "column_name": col_label,
                         "role": "static_filter",
-                        "filter_value": fv
+                        "filter_value": fv,
+                        "operator": op,
+                        "source_sheet": src_sheet,
+                        "header_resolved": header_ok,
                     })
 
             count_source = data_source_sheet if data_source_sheet else "source"
@@ -1237,12 +1361,19 @@ def calculate_formula_nesting_depth(formula_str):
 def parse_formula(formula_str, *args, **kwargs):
     """
     Wrapper for _parse_formula_impl to inject nesting_depth and function_chain.
+    Also flags external workbook references.
     """
     res = _parse_formula_impl(formula_str, *args, **kwargs)
     if isinstance(res, dict):
         res["nesting_depth"] = calculate_formula_nesting_depth(formula_str)
         formula_upper = str(formula_str).upper() if formula_str else ""
         res["function_chain"] = list(dict.fromkeys(re.findall(r'\b([A-Z][A-Z0-9_\.]+)\s*\(', formula_upper)))
+        if formula_str and is_external_workbook_ref(str(formula_str)):
+            res["references_external"] = True
+            if res.get("resolved_by") not in ("degraded",):
+                # External unresolved refs must not look like full success
+                if not res.get("data_source_columns"):
+                    res["resolved_by"] = "degraded"
     return res
 
 
@@ -1255,6 +1386,10 @@ def parse_formula_with_library(xl_model, sheet_name, cell_ref, formula_str, *arg
         res["nesting_depth"] = calculate_formula_nesting_depth(formula_str)
         formula_upper = str(formula_str).upper() if formula_str else ""
         res["function_chain"] = list(dict.fromkeys(re.findall(r'\b([A-Z][A-Z0-9_\.]+)\s*\(', formula_upper)))
+        if formula_str and is_external_workbook_ref(str(formula_str)):
+            res["references_external"] = True
+            if not res.get("data_source_columns"):
+                res["resolved_by"] = "degraded"
     return res
 
 

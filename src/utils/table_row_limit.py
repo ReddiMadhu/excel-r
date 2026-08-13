@@ -1,11 +1,14 @@
 """Limit table data-row reads for extraction and formula compile."""
 import os
+import re
 from typing import Any, Dict, List, Optional, Set
 
 import openpyxl
 from openpyxl.utils import get_column_letter, range_boundaries
 
 TABLE_DATA_ROW_LIMIT = int(os.getenv("TABLE_DATA_ROW_LIMIT", "10"))
+# How many head/tail rows to always scan when discovering formula variants
+FORMULA_VARIANT_SCAN_EDGE = int(os.getenv("FORMULA_VARIANT_SCAN_EDGE", "50"))
 
 
 def limit_data_rows(data_rows: List[int], limit: Optional[int] = None) -> List[int]:
@@ -14,6 +17,38 @@ def limit_data_rows(data_rows: List[int], limit: Optional[int] = None) -> List[i
     if not data_rows or len(data_rows) <= cap:
         return list(data_rows)
     return data_rows[:cap]
+
+
+def rows_for_formula_variant_scan(data_rows: List[int], edge: Optional[int] = None) -> List[int]:
+    """
+    Select rows to scan for unique formula patterns.
+
+    Always includes the first `edge` and last `edge` data rows.
+    For small tables, returns all data rows.
+    """
+    if not data_rows:
+        return []
+    n = edge if edge is not None else FORMULA_VARIANT_SCAN_EDGE
+    if len(data_rows) <= n * 2:
+        return list(data_rows)
+    head = data_rows[:n]
+    tail = data_rows[-n:]
+    seen = set()
+    out = []
+    for r in head + tail:
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+def normalize_formula_pattern_key(formula_str: str) -> str:
+    """Normalize a formula for variant grouping (whitespace collapsed, uppercased)."""
+    if not formula_str:
+        return ""
+    f = str(formula_str).strip().upper()
+    f = re.sub(r"\s+", "", f)
+    return f
 
 
 def compile_range_for_table(table: Dict[str, Any], limit: Optional[int] = None) -> str:

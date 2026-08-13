@@ -24,7 +24,11 @@ import src.parsers.structural_summary as structural_summary
 import src.parsers.summary_table_detector as summary_table_detector
 import src.utils.llm_client as llm_client
 import src.parsers.formula_lineage as formula_lineage_mod
-from src.utils.table_row_limit import limit_data_rows
+from src.utils.table_row_limit import (
+    limit_data_rows,
+    rows_for_formula_variant_scan,
+    normalize_formula_pattern_key,
+)
 from src.utils.timing_log import log_step, timed_step
 
 
@@ -592,6 +596,8 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             header_rows = row_classification["header_rows"]
             data_rows = row_classification["data_rows"]
             active_data_rows = limit_data_rows(data_rows)
+            # Scan head+tail for formula variants (not just first 10)
+            variant_scan_rows = rows_for_formula_variant_scan(data_rows)
             total_rows = row_classification["total_rows"]
             check_rows = row_classification["check_rows"]
             
@@ -656,21 +662,66 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
             for c_idx, col_name in enumerate(headers, col_start):
                 col_letter = get_column_letter(c_idx)
                 
-                # Get formulas from data rows (first N rows only for large tables)
-                if row_count > 1000:
-                    col_formulas = [col_formulas_cache[c_idx][r - 1] for r in active_data_rows]
+                # Collect formulas from variant-scan rows (head+tail of all data rows)
+                if row_count > 1000 and col_formulas_cache:
+                    col_formulas = []
+                    for r in variant_scan_rows:
+                        try:
+                            col_formulas.append(col_formulas_cache[c_idx][r - 1])
+                        except (IndexError, KeyError):
+                            col_formulas.append(ws_form.cell(row=r, column=c_idx).value)
                 else:
-                    col_formulas = [ws_form.cell(row=r, column=c_idx).value for r in active_data_rows]
-                # Find all unique non-empty formulas and their row numbers
-                unique_formulas = []
-                seen_f = set()
-                for r, f in zip(active_data_rows, col_formulas):
+                    col_formulas = [ws_form.cell(row=r, column=c_idx).value for r in variant_scan_rows]
+
+                # Group by normalized formula pattern — do NOT union unrelated formulas
+                pattern_groups = {}  # pattern_key -> {formula, rows, count}
+                for r, f in zip(variant_scan_rows, col_formulas):
                     if f and str(f).startswith('='):
-                        if f not in seen_f:
-                            seen_f.add(f)
-                            unique_formulas.append((r, f))
-                
-                # Try formulas library first, then fall back to custom parser
+                        # Also detect external refs early
+                        key = normalize_formula_pattern_key(str(f))
+                        # Collapse fill-down row numbers for same relative pattern:
+                        # replace the current row number in cell refs with ROW
+                        key_collapsed = re.sub(
+                            rf'(?<![A-Z0-9])({re.escape(str(r))})(?![0-9])',
+                            'ROW',
+                            key,
+                        )
+                        grp = pattern_groups.get(key_collapsed)
+                        if grp is None:
+                            pattern_groups[key_collapsed] = {
+                                "formula": str(f),
+                                "row": r,
+                                "count": 1,
+                                "key": key_collapsed,
+                            }
+                        else:
+                            grp["count"] += 1
+
+                unique_formulas = [
+                    (g["row"], g["formula"], g["count"], g["key"])
+                    for g in pattern_groups.values()
+                ]
+                # Sort by count descending so dominant variant is first
+                unique_formulas.sort(key=lambda x: -x[2])
+
+                def _parse_one(f_row, f_str):
+                    cell_ref = f"{col_letter}{f_row}"
+                    if xl_model is not None:
+                        return formula_parser.parse_formula_with_library(
+                            xl_model, s_name, cell_ref, f_str,
+                            f_row, ws_val, raw_column_maps,
+                            table_col_mapping, t_name, ws_form,
+                            detected_tables=sheet_tables
+                        )
+                    return formula_parser.parse_formula(
+                        f_str, f_row, ws_val,
+                        raw_column_maps, table_col_mapping, t_name,
+                        ws_form,
+                        detected_tables=sheet_tables
+                    )
+
+                formula_variants = []
+                first_formula = None
                 parsed_f = {
                     "type": "raw",
                     "formula_pattern": "",
@@ -680,83 +731,33 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                     "formula_count": 0,
                     "resolved_by": "none",
                 }
-                
-                first_formula = None
-                if unique_formulas:
-                    first_row, first_formula = unique_formulas[0]
-                    cell_ref = f"{col_letter}{first_row}"
-                    
-                    if xl_model is not None:
-                        parsed_f = formula_parser.parse_formula_with_library(
-                            xl_model, s_name, cell_ref, first_formula,
-                            first_row, ws_val, raw_column_maps,
-                            table_col_mapping, t_name, ws_form,
-                            detected_tables=sheet_tables
-                        )
-                    else:
-                        parsed_f = formula_parser.parse_formula(
-                            first_formula, first_row, ws_val,
-                            raw_column_maps, table_col_mapping, t_name,
-                            ws_form,
-                            detected_tables=sheet_tables
-                        )
-                    
-                    # Parse any additional unique formulas and merge them
-                    for f_row, f_str in unique_formulas[1:]:
-                        cell_ref_alt = f"{col_letter}{f_row}"
-                        if xl_model is not None:
-                            parsed_alt = formula_parser.parse_formula_with_library(
-                                xl_model, s_name, cell_ref_alt, f_str,
-                                f_row, ws_val, raw_column_maps,
-                                table_col_mapping, t_name, ws_form,
-                                detected_tables=sheet_tables
-                            )
-                        else:
-                            parsed_alt = formula_parser.parse_formula(
-                                f_str, f_row, ws_val,
-                                raw_column_maps, table_col_mapping, t_name,
-                                ws_form,
-                                detected_tables=sheet_tables
-                            )
-                        
-                        # Merge data source columns
-                        merged_cols = set(parsed_f.get("data_source_columns", []))
-                        merged_cols.update(parsed_alt.get("data_source_columns", []))
-                        parsed_f["data_source_columns"] = list(merged_cols)
-                        
-                        # Merge data source sheet (prefer non-empty and non-Summary)
-                        if parsed_alt.get("data_source_sheet") and parsed_alt["data_source_sheet"] != s_name:
-                            parsed_f["data_source_sheet"] = parsed_alt["data_source_sheet"]
-                            
-                        # Merge formula source details
-                        existing_details = parsed_f.get("formula_source_details", [])
-                        seen_details = {(d.get("column_name"), d.get("role")) for d in existing_details}
-                        for d in parsed_alt.get("formula_source_details", []):
-                            detail_key = (d.get("column_name"), d.get("role"))
-                            if detail_key not in seen_details:
-                                seen_details.add(detail_key)
-                                existing_details.append(d)
-                        parsed_f["formula_source_details"] = existing_details
-                        
-                        # Accumulate formula count
-                        parsed_f["formula_count"] = parsed_f.get("formula_count", 0) + parsed_alt.get("formula_count", 0)
-                        
-                        # Combine formula patterns (if distinct)
-                        if parsed_alt.get("formula_pattern") and parsed_alt["formula_pattern"] != parsed_f.get("formula_pattern"):
-                            parsed_f["formula_pattern"] = parsed_f["formula_pattern"] + " | " + parsed_alt["formula_pattern"]
-                        
-                        # Merge function chains
-                        if "function_chain" in parsed_f and "function_chain" in parsed_alt:
-                            merged_chain = list(dict.fromkeys(parsed_f["function_chain"] + parsed_alt["function_chain"]))
-                            parsed_f["function_chain"] = merged_chain
-                        
-                        # Merge nesting depths
-                        if "nesting_depth" in parsed_f and "nesting_depth" in parsed_alt:
-                            parsed_f["nesting_depth"] = max(parsed_f["nesting_depth"], parsed_alt["nesting_depth"])
-                
+
+                for f_row, f_str, cell_count, _pkey in unique_formulas:
+                    parsed_one = _parse_one(f_row, f_str)
+                    formula_variants.append({
+                        "formula": f_str,
+                        "row": f_row,
+                        "cell_count": cell_count,
+                        "parsed": parsed_one,
+                    })
+                    if first_formula is None:
+                        first_formula = f_str
+                        parsed_f = dict(parsed_one)
+                        parsed_f["formula_count"] = cell_count
+
+                # Dominant = highest cell_count (already sorted)
+                if formula_variants:
+                    dominant = formula_variants[0]
+                    parsed_f = dict(dominant["parsed"])
+                    parsed_f["formula_count"] = sum(v["cell_count"] for v in formula_variants)
+                    first_formula = dominant["formula"]
+
                 depth = parsed_f.get("nesting_depth", 0)
                 f_chain = parsed_f.get("function_chain", [])
-                    
+                lineage_is_mixed = False
+                if len(formula_variants) > 1:
+                    # Will set properly after lineage fingerprints are built
+                    lineage_is_mixed = True
                 # Samples & Data Type detection (limit scan for efficiency)
                 sample_vals = []
                 non_empty_for_dtype = []
@@ -882,6 +883,7 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 col_info = {
                     "column_name": col_name,
                     "table_name": t_name,
+                    "sheet_name": s_name,
                     "data_type": dtype,
                     "type": col_type,
                     "formula": first_formula or "",
@@ -892,11 +894,15 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                     "sample_values": sample_vals[:3],
                     "nesting_depth": depth,
                     "function_chain": f_chain,
-                    # Temporary fields for lineage Pass 2 (will be stripped later)
+                    # Temporary fields for lineage Pass 2 (data_source_columns kept for db joins)
                     "formula_source_details": fs_details,
                     "data_source_sheet": ds_sheet,
                     "data_source_columns": ds_cols,
+                    "_formula_variants_raw": formula_variants,
+                    "lineage_is_mixed": lineage_is_mixed,
                 }
+                if parsed_f.get("references_external"):
+                    col_info["references_external"] = True
                 
                 # Fetch LLM business definition from the whole-workbook semantic lookup
                 col_sem = t_sem.get("columns", {}).get(normalize_key(col_name), "")
@@ -908,26 +914,98 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                 columns_json.append(col_info)
             
             # ── Pass 2: Build formula_lineage for every formula column ─────────────
-            # Build a column index: {column_name -> col_info_dict} from all collected columns
-            # This allows lineage resolution across tables within the same sheet
-            col_index = {c["column_name"]: c for c in columns_json}
+            # Sheet-qualified index: "sheet :: column" — prevents summary label hijack
+            def _build_col_index(cols, sheet_name):
+                idx = {}
+                for c in cols:
+                    cname = c.get("column_name", "")
+                    if not cname:
+                        continue
+                    c["_sheet_name"] = sheet_name
+                    c["sheet_name"] = sheet_name
+                    idx[f"{sheet_name} :: {cname}"] = c
+                    # Bare name only for same-sheet computed refs (arithmetic on summary)
+                    if c.get("type") in ("formula_based", "pivot_value", "total"):
+                        # Prefer first-writer; do not overwrite with label columns
+                        if cname not in idx or idx[cname].get("type") == "label":
+                            if c.get("type") != "label":
+                                idx[cname] = c
+                return idx
+
+            col_index = _build_col_index(columns_json, s_name)
             for col_info in columns_json:
                 if col_info.get("type") in ("formula_based", "total", "check", "pivot_value") and col_info.get("formula"):
-                    lineage = formula_lineage_mod.build_formula_lineage(
-                        parsed_result={
-                            "formula_source_details": col_info.get("formula_source_details", []),
-                            "data_source_sheet": col_info.get("data_source_sheet", ""),
-                            "data_source_columns": col_info.get("data_source_columns", []),
-                            "formula_pattern": col_info.get("formula_pattern", ""),
-                        },
-                        formula_str=col_info.get("formula", ""),
-                        all_column_index=col_index,
-                    )
-                    if lineage:
-                        col_info["formula_lineage"] = lineage
+                    # Build lineage per variant, then pick dominant
+                    variants_out = []
+                    raw_variants = col_info.pop("_formula_variants_raw", []) or []
+                    if not raw_variants:
+                        raw_variants = [{
+                            "formula": col_info.get("formula", ""),
+                            "row": None,
+                            "cell_count": col_info.get("formula_count", 1),
+                            "parsed": {
+                                "formula_source_details": col_info.get("formula_source_details", []),
+                                "data_source_sheet": col_info.get("data_source_sheet", ""),
+                                "data_source_columns": col_info.get("data_source_columns", []),
+                                "formula_pattern": col_info.get("formula_pattern", ""),
+                                "resolved_by": col_info.get("resolved_by", "custom_parser"),
+                                "references_external": col_info.get("references_external", False),
+                                "function_chain": col_info.get("function_chain", []),
+                            },
+                        }]
+
+                    for rv in raw_variants:
+                        parsed = rv.get("parsed") or {}
+                        lineage = formula_lineage_mod.build_formula_lineage(
+                            parsed_result={
+                                "formula_source_details": parsed.get("formula_source_details", []),
+                                "data_source_sheet": parsed.get("data_source_sheet", ""),
+                                "data_source_columns": parsed.get("data_source_columns", []),
+                                "formula_pattern": parsed.get("formula_pattern", ""),
+                                "resolved_by": parsed.get("resolved_by", "custom_parser"),
+                                "references_external": parsed.get("references_external", False),
+                                "function_chain": parsed.get("function_chain", []),
+                            },
+                            formula_str=rv.get("formula", ""),
+                            all_column_index=col_index,
+                        )
+                        if lineage:
+                            variants_out.append({
+                                "formula": rv.get("formula", ""),
+                                "row": rv.get("row"),
+                                "cell_count": rv.get("cell_count", 1),
+                                "formula_pattern": parsed.get("formula_pattern", ""),
+                                "formula_lineage": lineage,
+                                "fingerprint": lineage.get("fingerprint", ""),
+                            })
+
+                    if variants_out:
+                        # Dominant = highest cell_count
+                        variants_out.sort(key=lambda v: -v.get("cell_count", 0))
+                        fingerprints = {v.get("fingerprint") for v in variants_out if v.get("fingerprint")}
+                        lineage_is_mixed = len(fingerprints) > 1
+                        col_info["formula_lineage"] = variants_out[0]["formula_lineage"]
+                        col_info["formula"] = variants_out[0]["formula"]
+                        col_info["formula_pattern"] = variants_out[0].get("formula_pattern") or col_info.get("formula_pattern", "")
+                        col_info["lineage_is_mixed"] = lineage_is_mixed
+                        col_info["variant_count"] = len(variants_out)
+                        if lineage_is_mixed or len(variants_out) > 1:
+                            col_info["formula_variants"] = [
+                                {
+                                    "formula": v["formula"],
+                                    "cell_count": v["cell_count"],
+                                    "fingerprint": v["fingerprint"],
+                                    "formula_pattern": v.get("formula_pattern", ""),
+                                    "ultimate_raw_sources": v["formula_lineage"].get("ultimate_raw_sources", []),
+                                    "computation_type": v["formula_lineage"].get("computation_type"),
+                                }
+                                for v in variants_out
+                            ]
+                            if lineage_is_mixed:
+                                col_info["formula_lineage"]["lineage_is_mixed"] = True
             
             # Rebuild col_index with lineage now attached (enables cross-table depth-2 resolution)
-            col_index = {c["column_name"]: c for c in columns_json}
+            col_index = _build_col_index(columns_json, s_name)
             for col_info in columns_json:
                 if "formula_lineage" in col_info:
                     lineage = formula_lineage_mod.build_formula_lineage(
@@ -936,19 +1014,24 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                             "data_source_sheet": col_info.get("data_source_sheet", ""),
                             "data_source_columns": col_info.get("data_source_columns", []),
                             "formula_pattern": col_info.get("formula_pattern", ""),
+                            "resolved_by": (col_info.get("formula_lineage") or {}).get("resolved_by", "custom_parser"),
+                            "references_external": col_info.get("references_external", False),
+                            "function_chain": col_info.get("function_chain", []),
                         },
                         formula_str=col_info.get("formula", ""),
                         all_column_index=col_index,
                     )
                     if lineage:
+                        if col_info.get("lineage_is_mixed"):
+                            lineage["lineage_is_mixed"] = True
                         col_info["formula_lineage"] = lineage
             # ─────────────────────────────────────────────────────────────────────
             
-            # Strip temporary lineage resolver inputs from the columns JSON output
+            # Strip temporary lineage resolver inputs; KEEP data_source_columns for joins
             for col_info in columns_json:
                 col_info.pop("formula_source_details", None)
-                col_info.pop("data_source_sheet", None)
-                col_info.pop("data_source_columns", None)
+                # Keep data_source_sheet and data_source_columns for db_loader table_joins
+                col_info.pop("_formula_variants_raw", None)
             
             # Row-level serialization removed: for large tables (e.g. pivot tables
             # with 20K+ rows), emitting every row value would bloat the JSON output.
@@ -1046,15 +1129,26 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
         })
         
     with timed_step("json_build", "cross_sheet_lineage", file_name=os.path.basename(file_name)):
+        # Sheet-qualified global index — never resolve raw SQL_data.X via Summary.X
         global_col_index = {}
         for sheet_json in sheets_json:
+            sheet_name = sheet_json.get("sheet_name", "")
             for table in sheet_json.get("tables", []):
                 for col in table.get("columns", []):
                     col_name = col.get("column_name", "")
-                    if col_name:
-                        global_col_index[col_name] = col
+                    if not col_name:
+                        continue
+                    col["sheet_name"] = sheet_name
+                    global_col_index[f"{sheet_name} :: {col_name}"] = col
+                    # Bare name only for computed columns (not labels) to allow
+                    # arithmetic refs on the same summary sheet
+                    if col.get("type") in ("formula_based", "pivot_value", "total"):
+                        existing = global_col_index.get(col_name)
+                        if existing is None or existing.get("type") == "label":
+                            global_col_index[col_name] = col
 
         for sheet_json in sheets_json:
+            sheet_name = sheet_json.get("sheet_name", "")
             for table in sheet_json.get("tables", []):
                 for col_info in table.get("columns", []):
                     lineage = col_info.get("formula_lineage")
@@ -1064,9 +1158,22 @@ def build_workbook_json(file_name, file_hash, sheet_classifications, wb_val, wb_
                     changed = False
                     for inp in lineage.get("direct_inputs", []):
                         col_name = inp.get("column", "")
-                        known = global_col_index.get(col_name)
+                        src_sheet = inp.get("source_sheet") or inp.get("table") or ""
+                        # Prefer sheet-qualified lookup
+                        known = None
+                        if src_sheet:
+                            known = global_col_index.get(f"{src_sheet} :: {col_name}")
+                        # Only fall back to bare name when the input is a same-sheet computed ref
+                        if known is None and not inp.get("is_raw", True):
+                            known = global_col_index.get(col_name)
                         was_raw = inp.get("is_raw", True)
-                        actually_raw = (known is None) or (known.get("type", "raw") == "raw")
+                        actually_raw = (known is None) or (known.get("type", "raw") in ("raw", "label"))
+                        # Never promote a raw-sheet input to a summary label/column
+                        if src_sheet and src_sheet != sheet_name and known is not None:
+                            known_sheet = known.get("sheet_name", "")
+                            if known_sheet and known_sheet != src_sheet:
+                                known = None
+                                actually_raw = True
                         if was_raw and not actually_raw and known and "formula_lineage" in known:
                             new_inp = dict(inp)
                             new_inp["is_raw"] = False

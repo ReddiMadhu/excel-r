@@ -96,8 +96,32 @@ class Recommender:
             max_fp_ratio = uni.get("max_fingerprint_ratio", 0.0)
 
             extraction_quality = wb.get("extraction_quality_score")
+            comparison_mode = wb.get("comparison_mode") or "insufficient"
+            # Missing quality must NEVER default to 1.0 — that enables false decommission
             if extraction_quality is None:
-                extraction_quality = 1.0
+                action = "review"
+                reasons = [
+                    "Extraction quality score is missing — manual review required before any decommission/merge."
+                ]
+                decisions[wb_id] = {
+                    "workbook_id": wb_id,
+                    "workbook_name": wb["name"],
+                    "action": action,
+                    "merge_with_name": None,
+                    "merge_with_id": None,
+                    "reasons": reasons,
+                    "common_kpis": [],
+                    "common_datasources": [],
+                    "matching_fingerprints": [],
+                    "kpi_overlap_score": max_kpi,
+                    "datasource_overlap_score": max_ds,
+                    "uniqueness_score": uni_score,
+                    "ds_sources_count": 0,
+                    "ds_shared_count": 0,
+                    "llm_override": False,
+                    "llm_justification": None,
+                }
+                continue
 
             # Get overlap data for the most similar pair
             best_pair_common_kpis = []
@@ -105,6 +129,7 @@ class Recommender:
             matching_fps = []
             ds_sources_self = 0
             ds_sources_partner = 0
+            overlap = {}
             if most_similar_id:
                 pair_key = (min(wb_id, most_similar_id), max(wb_id, most_similar_id))
                 overlap = pairwise.get(pair_key, {})
@@ -152,13 +177,25 @@ class Recommender:
                 has_common and len(unique_self) == 0 and len(unique_partner) == 0
             )
 
-            if extraction_quality < self.min_extraction_quality:
+            # Related-but-not-identical (extra filters) must not decommission
+            overlap_rel = overlap.get("overlap_relationship", "")
+            overlap_class = overlap.get("overlap_class", "")
+            is_related_only = overlap_class == "related" or overlap_rel == "related"
+
+            if extraction_quality < self.min_extraction_quality or comparison_mode in ("insufficient",):
                 action = "review"
                 reasons.append(
                     f"Extraction quality {extraction_quality:.0%} is below "
-                    f"{self.min_extraction_quality:.0%} — manual review required before decommission."
+                    f"{self.min_extraction_quality:.0%} (mode={comparison_mode}) — "
+                    f"manual review required before decommission."
                 )
-            elif self_is_kpi_subset and max_ds >= self.merge_ds:
+            elif is_related_only:
+                action = "review"
+                reasons.append(
+                    f"KPIs are related but not identical to '{most_similar_name}' "
+                    f"(extra filters or partial overlap) — review required."
+                )
+            elif self_is_kpi_subset and max_ds >= self.merge_ds and max_fp_ratio >= self.decommission_fp:
                 action = "decommission"
                 reasons.append(
                     f"All {len(best_pair_common_kpis)} KPIs in this workbook are already "
@@ -557,7 +594,9 @@ class Recommender:
                                 continue
                             other_id = id_b if wb_id == id_a else id_a
                             if decisions.get(wb_id, {}).get("action") in ("keep", "review"):
-                                eq = wb_map.get(wb_id, {}).get("extraction_quality_score") or 1.0
+                                eq = wb_map.get(wb_id, {}).get("extraction_quality_score")
+                                if eq is None:
+                                    eq = 0.0
                                 if eq >= self.min_extraction_quality and scores_support_merge:
                                     decisions[wb_id]["action"] = "merge"
                                     decisions[wb_id]["merge_with_id"] = other_id

@@ -25,42 +25,105 @@ def _get_parse_fn():
 def classify_criteria_ref(ref_str, current_row=None):
     """
     Classify a SUMIFS/COUNTIFS criteria value reference.
-    Returns: 'group_by_key' or 'static_filter'
 
-    Rules (based on $ anchoring in Excel):
-      $COLrow  (col fixed, row relative) → group_by_key  e.g. Summary!$A6
-      COL$row  (col relative, row fixed) → static_filter  e.g. Summary!J$5
-      $COL$row (both fixed)              → static_filter  e.g. Summary!$A$2
-      COLrow   (both relative)           → group_by_key  e.g. A6
-      "string" (literal)                 → static_filter
+    Returns one of:
+      'group_by_key' | 'static_filter' | 'parameter_filter' | 'period_or_header_filter'
+
+    $ anchoring is a HINT, not the sole decision:
+      - string literal / concatenated operator criteria → static_filter
+      - same-row relative ref (A6 with formula on row 6) → group_by_key
+      - row-absolute header/title refs (J$5, $A$2) → static_filter (caller may refine)
     """
     if not ref_str:
         return 'static_filter'
     ref = str(ref_str).lstrip('=').strip()
+
     # String literal
     if ref.startswith('"') or ref.startswith("'"):
         return 'static_filter'
-    # Get cell portion
-    cell_part = ref.split('!')[-1] if '!' in ref else ref
-    # Row is absolute if we have a $ immediately before a digit (after a letter)
-    row_is_absolute = bool(re.search(r'(?<=[A-Za-z])\$\d', cell_part))
-    if row_is_absolute:
+
+    # Concatenated criteria: ">"&A1, "<="&$B$1, "<>"&C2
+    if '&' in ref or re.match(r'^"[<>=!]+"', ref):
         return 'static_filter'
+
+    # Operator-prefixed literal without quotes (rare but possible)
+    if re.match(r'^[<>=]', ref) and not re.match(r'^\$?[A-Z]+', ref, re.I):
+        return 'static_filter'
+
+    cell_part = ref.split('!')[-1] if '!' in ref else ref
+    row_is_absolute = bool(re.search(r'(?<=[A-Za-z])\$\d', cell_part))
+    row_match = re.search(r'(\d+)', cell_part.replace('$', ''))
+    row_num = int(row_match.group(1)) if row_match else None
+
+    if row_is_absolute:
+        # Absolute row: typically a fixed filter / header / parameter
+        return 'static_filter'
+
+    # Relative row matching the formula row → grouping key
+    if current_row is not None and row_num is not None and row_num == int(current_row):
+        return 'group_by_key'
+
+    # Relative row without current_row context — default to group_by (Excel fill pattern)
     return 'group_by_key'
 
 
-def extract_filter_value(crit_val_ref, crit_val_repr, summary_ws_val=None):
+def _parse_concat_criteria(ref):
+    """
+    Parse concatenated criteria like '">"&A1' or '"<="&$B$2'.
+    Returns (operator, remainder_ref) or (None, None).
+    """
+    ref = str(ref).strip()
+    m = re.match(r'^"([<>=!]+)"\s*&\s*(.+)$', ref)
+    if m:
+        return m.group(1), m.group(2).strip()
+    m = re.match(r"^'([<>=!]+)'\s*&\s*(.+)$", ref)
+    if m:
+        return m.group(1), m.group(2).strip()
+    # Unquoted: ">"&A1 already handled; also "<>Closed" style literals
+    m = re.match(r'^"([<>=!]{1,2})(.+)"$', ref)
+    if m and m.group(2):
+        return m.group(1), f'"{m.group(2)}"'
+    return None, None
+
+
+def extract_filter_value(crit_val_ref, crit_val_repr, summary_ws_val=None, return_operator=False):
     """
     Extract a clean, human-readable filter value from a static criteria reference.
+
+    When return_operator=True, returns (value, operator) tuple. Operator defaults to '='.
     """
     ref = str(crit_val_ref).strip()
+    operator = "="
+
+    # Concatenated / operator criteria
+    op, remainder = _parse_concat_criteria(ref)
+    if op is not None:
+        operator = op
+        if remainder.startswith('"') or remainder.startswith("'"):
+            value = remainder.strip('"\'')
+            return (value, operator) if return_operator else value
+        # Resolve the cell portion
+        crit_val_ref = remainder
+        ref = remainder
+
+    # Leading operator in literal: ">=100", "<>Closed"
+    lit_op = re.match(r'^"([<>=!]{1,2})(.+)"$', ref)
+    if lit_op:
+        operator = lit_op.group(1)
+        value = lit_op.group(2)
+        return (value, operator) if return_operator else value
+
     # 1. String literal in formula
     if ref.startswith('"'):
-        return ref.strip('"')
+        value = ref.strip('"')
+        return (value, operator) if return_operator else value
+
     # 2. Value embedded in repr e.g. "Summary!K5 ('Flexible')"
-    match = re.search(r"\(['\"](.+?)['\"]\)", crit_val_repr)
+    match = re.search(r"\(['\"](.+?)['\"]\)", str(crit_val_repr or ""))
     if match:
-        return f"'{match.group(1)}'"
+        value = f"'{match.group(1)}'"
+        return (value, operator) if return_operator else value
+
     # 3. Read actual cell from worksheet
     if summary_ws_val:
         try:
@@ -75,10 +138,13 @@ def extract_filter_value(crit_val_ref, crit_val_repr, summary_ws_val=None):
                         ws = wb[sheet_name]
                 val = ws.cell(row=row_num, column=col_idx).value
                 if val is not None:
-                    return f"'{val}'" if isinstance(val, str) else str(val)
+                    value = f"'{val}'" if isinstance(val, str) else str(val)
+                    return (value, operator) if return_operator else value
         except Exception:
             pass
-    return crit_val_repr.strip("\"'")
+
+    value = str(crit_val_repr or ref).strip("\"'")
+    return (value, operator) if return_operator else value
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -179,54 +245,144 @@ def detect_computation_type(formula_str):
 # Lineage Building
 # ─────────────────────────────────────────────────────────────────
 
+LINEAGE_SCHEMA_VERSION = "2.0-semantic"
+
+
+def _index_lookup(all_column_index, sheet, col_name):
+    """
+    Look up a column in a sheet-qualified index.
+
+    Preferred key: "sheet :: column". Falls back to bare column_name only when
+    the sheet is empty/unknown. Never resolves a raw-sheet column to a summary
+    column that happens to share the same label.
+    """
+    if not all_column_index or not col_name:
+        return None
+    if sheet:
+        qualified = f"{sheet} :: {col_name}"
+        if qualified in all_column_index:
+            return all_column_index[qualified]
+        # Do not fall back to bare name when a sheet was specified — that is the
+        # Product Subtype hijack that drops raw group-by columns from ultimate sources.
+        return None
+    return all_column_index.get(col_name)
+
+
 def build_direct_inputs(formula_source_details, data_source_sheet, all_column_index):
     """
     Build the direct_inputs list with is_raw flag and nested lineage.
 
-    all_column_index: dict {column_name -> column_dict} for all known columns.
+    all_column_index: dict keyed by "sheet :: column" (preferred) and optionally
+    bare column_name for same-sheet computed refs.
     """
     seen = set()
     direct_inputs = []
     for detail in formula_source_details:
         col_name = detail.get("column_name", "")
         role = detail.get("role", "")
-        if not col_name or col_name in seen:
+        if not col_name:
             continue
-        seen.add(col_name)
-        known = all_column_index.get(col_name)
-        is_raw = (known is None) or (known.get("type", "raw") == "raw")
-        table = known.get("table_name", data_source_sheet) if known else data_source_sheet
+        source_sheet = detail.get("source_sheet") or data_source_sheet or ""
+        seen_key = (source_sheet, col_name, role)
+        if seen_key in seen:
+            continue
+        seen.add(seen_key)
+
+        known = _index_lookup(all_column_index, source_sheet, col_name)
+        # Raw-sheet references are always raw even if a summary table has the same label
+        if source_sheet and known is None:
+            is_raw = True
+            table = source_sheet
+        elif known is None:
+            is_raw = True
+            table = data_source_sheet or ""
+        else:
+            is_raw = known.get("type", "raw") == "raw"
+            table = known.get("table_name") or known.get("sheet_name") or source_sheet or data_source_sheet
+
+        # Roles that come from raw criteria/sum ranges must stay raw when the
+        # source sheet is a data sheet (present in maps but not as a computed col).
+        if role in ("sum_range", "group_by_key", "static_filter", "count_range", "criteria_range"):
+            if source_sheet and (known is None or known.get("type") in ("raw", "label", None)):
+                # Prefer treating as raw source unless the known column is formula-based
+                # on the *same* source sheet.
+                known_sheet = (known or {}).get("sheet_name") or (known or {}).get("data_source_sheet")
+                if known is None or known.get("type") in ("raw", "label") or known_sheet != source_sheet:
+                    is_raw = True
+                    table = source_sheet
+                    known = None
+
         node = {"column": col_name, "table": table, "is_raw": is_raw, "role": role}
+        if source_sheet:
+            node["source_sheet"] = source_sheet
         if "filter_value" in detail:
             node["filter_value"] = detail["filter_value"]
-        # Attach nested lineage for intermediate computed columns
+        if "operator" in detail:
+            node["operator"] = detail["operator"]
+        if detail.get("header_resolved") is False:
+            node["header_resolved"] = False
+        # Attach nested lineage for intermediate computed columns only
         if not is_raw and known and "formula_lineage" in known:
             node["nested_lineage"] = known["formula_lineage"]
         direct_inputs.append(node)
     return direct_inputs
 
 
-def collect_ultimate_sources(direct_inputs):
-    """Recursively collect ultimate raw source strings (table :: column)."""
+def collect_ultimate_sources(direct_inputs, _visited=None):
+    """
+    Recursively collect ultimate raw source strings (table :: column).
+
+    Walks nested_lineage.direct_inputs when ultimate_raw_sources is missing,
+    with cycle detection via visited keys.
+    """
+    if _visited is None:
+        _visited = set()
     sources = []
-    for inp in direct_inputs:
+    for inp in direct_inputs or []:
+        key = (inp.get("table", ""), inp.get("column", ""))
+        if key in _visited:
+            continue
+        _visited.add(key)
+
         if inp.get("is_raw"):
-            src = f"{inp['table']} :: {inp['column']}"
-            if src not in sources:
-                sources.append(src)
-        elif "nested_lineage" in inp:
-            for src in inp["nested_lineage"].get("ultimate_raw_sources", []):
+            table = inp.get("table") or ""
+            col = inp.get("column") or ""
+            if table and col:
+                src = f"{table} :: {col}"
+                if src not in sources:
+                    sources.append(src)
+            continue
+
+        nested = inp.get("nested_lineage") or {}
+        nested_sources = nested.get("ultimate_raw_sources") or []
+        if nested_sources:
+            for src in nested_sources:
+                if src not in sources:
+                    sources.append(src)
+        else:
+            # Walk nested direct_inputs when precomputed ultimates are absent
+            for src in collect_ultimate_sources(nested.get("direct_inputs", []), _visited):
                 if src not in sources:
                     sources.append(src)
     return sources
 
 
-def compute_lineage_depth(direct_inputs):
-    """Compute maximum lineage depth from direct_inputs."""
+def compute_lineage_depth(direct_inputs, _visited=None):
+    """Compute maximum lineage depth from direct_inputs with cycle protection."""
+    if _visited is None:
+        _visited = set()
     max_depth = 1
-    for inp in direct_inputs:
+    for inp in direct_inputs or []:
+        key = (inp.get("table", ""), inp.get("column", ""))
+        if key in _visited:
+            continue
+        _visited.add(key)
         if "nested_lineage" in inp:
-            max_depth = max(max_depth, inp["nested_lineage"].get("lineage_depth", 1) + 1)
+            nested = inp["nested_lineage"]
+            nested_depth = nested.get("lineage_depth")
+            if nested_depth is None:
+                nested_depth = compute_lineage_depth(nested.get("direct_inputs", []), _visited)
+            max_depth = max(max_depth, nested_depth + 1)
     return max_depth
 
 
@@ -278,7 +434,7 @@ def build_fingerprint(computation_type, computation_params, ultimate_raw_sources
         sum_col = _nfp(computation_params.get("sum_column") or "")
         group_by = sorted([_nfp(g) for g in computation_params.get("group_by", [])])
         filters = sorted([
-            f"{_nfp(flt['column'])}={_nfp(str(flt.get('value', '')))}"
+            f"{_nfp(flt['column'])}{flt.get('operator', '=')}{_nfp(str(flt.get('value', '')))}"
             for flt in computation_params.get("static_filters", [])
         ])
         parts.append(f"scalar:{scalar}")
@@ -291,7 +447,7 @@ def build_fingerprint(computation_type, computation_params, ultimate_raw_sources
     elif computation_type == "COUNTIFS":
         group_by = sorted([_nfp(g) for g in computation_params.get("group_by", [])])
         filters = sorted([
-            f"{_nfp(flt['column'])}={_nfp(str(flt.get('value', '')))}"
+            f"{_nfp(flt['column'])}{flt.get('operator', '=')}{_nfp(str(flt.get('value', '')))}"
             for flt in computation_params.get("static_filters", [])
         ])
         if filters:
@@ -379,7 +535,11 @@ def build_formula_lineage(parsed_result, formula_str, all_column_index):
             if d["role"] in ("group_by_key", "criteria_range")
         ))
         static_filters = [
-            {"column": d["column_name"], "operator": "=", "value": d.get("filter_value", "?")}
+            {
+                "column": d["column_name"],
+                "operator": d.get("operator", "="),
+                "value": d.get("filter_value", "?"),
+            }
             for d in formula_source_details if d["role"] == "static_filter"
         ]
         computation_params = {
@@ -393,7 +553,11 @@ def build_formula_lineage(parsed_result, formula_str, all_column_index):
             if d["role"] in ("count_range", "group_by_key")
         ))
         static_filters = [
-            {"column": d["column_name"], "operator": "=", "value": d.get("filter_value", "?")}
+            {
+                "column": d["column_name"],
+                "operator": d.get("operator", "="),
+                "value": d.get("filter_value", "?"),
+            }
             for d in formula_source_details if d["role"] == "static_filter"
         ]
         computation_params = {"group_by": group_by, "static_filters": static_filters}
@@ -456,8 +620,13 @@ def build_formula_lineage(parsed_result, formula_str, all_column_index):
         "ultimate_raw_sources": ultimate_raw_sources,
         "fingerprint": fingerprint,
         "resolved_by": resolved_by,
+        "lineage_schema_version": LINEAGE_SCHEMA_VERSION,
     }
     if wrapper_type:
         lineage["wrapper"] = wrapper_type
+    if parsed_result.get("references_external"):
+        lineage["references_external"] = True
+    if parsed_result.get("circular_reference"):
+        lineage["circular_reference"] = True
 
     return lineage

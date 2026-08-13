@@ -14,6 +14,7 @@ writes results to pairwise_overlap_cache with hash-based invalidation.
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.server.models.database import Database
@@ -28,7 +29,14 @@ from src.rationalization.semantic_similarity import (
     check_semantic_data_available,
 )
 
+from src.parsers.formula_lineage import LINEAGE_SCHEMA_VERSION
+
 logger = logging.getLogger(__name__)
+
+
+def _lineage_hash_suffix() -> str:
+    """Include lineage schema version so cache invalidates on semantic fixes."""
+    return f"|lineage:{LINEAGE_SCHEMA_VERSION}"
 
 
 def _get_canonical_kpis_for_workbook(
@@ -121,14 +129,18 @@ def _canonicalize_fingerprint(
     fingerprint: str,
     kpi_cache: Dict[str, str]
 ) -> str:
-    """Replace column names in a fingerprint with canonical equivalents."""
-    result = fingerprint
-    for original, canonical in kpi_cache.items():
-        orig_norm = original.lower().replace(" ", "_").replace("-", "_")
-        canon_norm = canonical.lower().replace(" ", "_").replace("-", "_")
-        if orig_norm in result.lower():
-            result = result.replace(orig_norm, canon_norm)
-    return result
+    """
+    Normalize fingerprint for cross-workbook comparison.
+
+    IMPORTANT: Do NOT replace SUM:/WHERE:/GROUP_BY: operand tokens with
+    canonical KPI names — that collapses Paid vs Incurred into the same
+    fingerprint when both KPIs are labeled "Total Claims".
+    Only light whitespace normalization is applied.
+    """
+    if not fingerprint:
+        return ""
+    # Preserve measure/filter/group semantics; only normalize separators
+    return re.sub(r"\s+", "", fingerprint.strip().lower())
 
 
 def jaccard_similarity(set_a: Set[str], set_b: Set[str]) -> float:
@@ -282,7 +294,7 @@ def compute_pairwise_overlaps(
     wb_hashes: Dict[int, str] = {}
     for wb in workbooks:
         row = db.query_one("SELECT file_hash_md5 FROM workbooks WHERE id = ?", (wb["id"],))
-        wb_hashes[wb["id"]] = row.get("file_hash_md5") or "" if row else ""
+        wb_hashes[wb["id"]] = (row.get("file_hash_md5") or "" if row else "") + _lineage_hash_suffix()
 
     wb_data: Dict[int, Dict[str, Any]] = {}
     for wb in workbooks:
@@ -365,21 +377,35 @@ def compute_pairwise_overlaps(
             )
 
             overlap_relationship = "distinct"
-            if kpi_a and kpi_b and kpi_a == kpi_b:
+            if kpi_a and kpi_b and kpi_a == kpi_b and fp_ratio >= 0.90:
+                overlap_relationship = "same"
+            elif kpi_a and kpi_b and kpi_a == kpi_b:
                 overlap_relationship = "identical"
             elif kpi_containment_a >= 1.0 and unique_kpis_b:
                 overlap_relationship = "a_subset_of_b"
             elif kpi_containment_b >= 1.0 and unique_kpis_a:
                 overlap_relationship = "b_subset_of_a"
             elif common_kpis and unique_kpis_a and unique_kpis_b:
-                overlap_relationship = "both_have_extras"
+                # Related: share measure/sources but extras on both sides (e.g. filters)
+                if ds_overlap >= 0.5 and fp_ratio < 0.90:
+                    overlap_relationship = "related"
+                else:
+                    overlap_relationship = "both_have_extras"
+            elif not matching_fps and not common_kpis:
+                overlap_relationship = "different"
+            elif fp_ratio == 0 and kpi_overlap == 0:
+                overlap_relationship = "unknown" if not src_a or not src_b else "different"
 
             overlap_class = "distinct"
-            # Relationship-first classification (mirrors Recommender):
-            #   duplicate       → subset, identical, or near-duplicate (Jaccard gates)
-            #   merge_candidate → shared KPIs with extras on BOTH sides
-            if overlap_relationship in ("identical", "a_subset_of_b", "b_subset_of_a"):
-                overlap_class = "duplicate"
+            # Semantic classes for rationalization:
+            #   same / related / different / unknown (+ legacy duplicate/merge_candidate)
+            if overlap_relationship == "same" or (
+                overlap_relationship in ("identical", "a_subset_of_b", "b_subset_of_a")
+                and fp_ratio >= 0.70
+            ):
+                overlap_class = "same" if overlap_relationship == "same" else "duplicate"
+            elif overlap_relationship == "related":
+                overlap_class = "related"
             elif (
                 kpi_overlap >= 0.85 and ds_overlap >= 0.85 and fp_ratio >= 0.70
             ):
@@ -390,6 +416,10 @@ def compute_pairwise_overlaps(
                 and ds_overlap >= 0.60
             ):
                 overlap_class = "merge_candidate"
+            elif overlap_relationship in ("different", "unknown"):
+                overlap_class = overlap_relationship
+            elif fp_ratio == 0 and kpi_overlap < 0.2:
+                overlap_class = "different"
 
             entry = {
                 "kpi_overlap": kpi_overlap,

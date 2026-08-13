@@ -145,10 +145,19 @@ def _content_match(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[str]:
     names contain opposite qualifiers (e.g. "Flexible" vs "Non-Flexible")
     are never clustered together on these weaker signals.
     """
-    # 1. Exact fingerprint match — trusted unconditionally because
-    #    identical fingerprints mean the formulas are character-identical.
+    # 1. Exact fingerprint match — only if names do not contradict AND fingerprint
+    #    encodes a resolved measure (not empty / Col_D).
     if a["_fp"] and a["_fp"] == b["_fp"]:
-        return "fingerprint"
+        fp_ok = "sum:col_" not in a["_fp"].lower() and a["_fp"].count("|") >= 1
+        if fp_ok and not _names_contradict(a.get("name", ""), b.get("name", "")):
+            return "fingerprint"
+        # If names contradict, still allow match only when WHERE filters already
+        # distinguish them inside the fingerprint (they wouldn't be equal then).
+        # Equal fingerprints + contradictory names ⇒ refuse.
+        if _names_contradict(a.get("name", ""), b.get("name", "")):
+            pass  # fall through to weaker signals (also guarded)
+        elif fp_ok:
+            return "fingerprint"
 
     # Guard: reject weaker signals when names are contradictory
     if _names_contradict(a.get("name", ""), b.get("name", "")):
@@ -163,12 +172,25 @@ def _content_match(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[str]:
     ):
         return "source_type"
 
-    # 3. Same formula pattern (non-empty)
-    if a["_fp_pattern"] and a["_fp_pattern"] == b["_fp_pattern"]:
+    # 3. Same formula pattern — only when fingerprint or sources also align weakly
+    #    Do not cluster on pattern alone (can collide across different measures).
+    if (
+        a["_fp_pattern"]
+        and a["_fp_pattern"] == b["_fp_pattern"]
+        and a["_sources_key"]
+        and a["_sources_key"] == b["_sources_key"]
+    ):
         return "pattern"
 
-    # 4. Same normalized definition (non-empty, at least 10 chars to avoid trivial matches)
-    if a["_def_norm"] and len(a["_def_norm"]) >= 10 and a["_def_norm"] == b["_def_norm"]:
+    # 4. Same normalized definition — disabled as sole signal (too weak for
+    #    decommission decisions). Require matching sources as well.
+    if (
+        a["_def_norm"]
+        and len(a["_def_norm"]) >= 10
+        and a["_def_norm"] == b["_def_norm"]
+        and a["_sources_key"]
+        and a["_sources_key"] == b["_sources_key"]
+    ):
         return "definition"
 
     return None

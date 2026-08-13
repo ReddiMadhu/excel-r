@@ -270,7 +270,9 @@ def assign_roles_for_cluster(
                     if my_sources else 1.0
                 )
                 
-                quality = wb_map.get(wb_id, {}).get("extraction_quality_score") or 1.0
+                quality = wb_map.get(wb_id, {}).get("extraction_quality_score")
+                if quality is None:
+                    quality = 0.0  # missing ⇒ never prefer for decommission
 
                 if quality < min_quality:
                     role, reasons = "review", [f"Extraction quality {quality:.0%} below threshold."]

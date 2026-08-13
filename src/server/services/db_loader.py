@@ -268,8 +268,9 @@ def load_workbook_json(
 
                 db.insert("columns", column_row)
 
-                # ── 2d. Insert into calculated_fields if formula column ──
-                if col_type in ("formula_based", "pivot_value", "total", "check"):
+                # ── 2d. Insert into calculated_fields if formula KPI column ──
+                # Exclude check/VALIDATION — they must not drive KPI overlap
+                if col_type in ("formula_based", "pivot_value", "total"):
                     fingerprint = ""
                     computation_type = ""
                     ultimate_raw_sources = []
@@ -278,6 +279,12 @@ def load_workbook_json(
                         fingerprint = lineage.get("fingerprint", "")
                         computation_type = lineage.get("computation_type", "")
                         ultimate_raw_sources = lineage.get("ultimate_raw_sources", [])
+                        if computation_type == "VALIDATION":
+                            continue  # never a KPI
+                        if lineage.get("lineage_is_mixed") or col.get("lineage_is_mixed"):
+                            # Mixed columns are unknown for comparison — still store
+                            # but mark computation_type so scorers can skip
+                            computation_type = computation_type or "UNKNOWN"
 
                     calc_field_row = {
                         "dashboard_id": dashboard_id,
