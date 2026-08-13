@@ -513,37 +513,157 @@ def resolve_dependency_to_column(dep_ref, raw_column_maps):
 
 
 def _custom_parser_handles(formula_str: str) -> bool:
-    """True when the custom parser fully understands this formula family."""
+    """
+    True when the custom parser fully understands this formula family.
+
+    COUNTIF / AVERAGE / SUMPRODUCT are NOT fully handled — claiming them
+    caused silent arithmetic misclassification. XLOOKUP and structured
+    table refs are unsupported.
+    """
     if not formula_str:
         return False
     fu = str(formula_str).upper().lstrip("=")
-    # Strip common wrappers
+    # Unsupported constructs — never claim custom parser handles them
+    if any(x in fu for x in ("XLOOKUP(", "XMATCH(", "FILTER(", "LAMBDA(", "LET(")):
+        return False
+    if "[" in formula_str and ( "[@" in formula_str or "]," in formula_str or re.search(r"\w+\[", formula_str)):
+        return False
     for w in ("IFERROR(", "IFNA(", "ISERROR("):
         if fu.startswith(w):
             fu = fu[len(w):]
             break
     return any(
         fn in fu
-        for fn in ("SUMIFS(", "COUNTIFS(", "COUNTIF(", "SUM(", "AVERAGE(", "SUMPRODUCT(")
+        for fn in ("SUMIFS(", "COUNTIFS(", "SUM(")
     ) or bool(re.search(r"[+\-*/]", fu))
 
 
+def detect_unsupported_formula_features(formula_str: str) -> list:
+    """Return unsupported feature tags for a formula (empty if fully supported)."""
+    if not formula_str:
+        return []
+    tags = []
+    fu = str(formula_str).upper()
+    for fn in ("XLOOKUP", "XMATCH", "FILTER", "LAMBDA", "LET", "SEQUENCE", "SORT", "UNIQUE"):
+        if f"{fn}(" in fu:
+            tags.append(f"unsupported_func:{fn}")
+    if "[@" in formula_str or re.search(r"\b[A-Za-z_][\w]*\[", formula_str):
+        tags.append("structured_table_ref")
+    # COUNTIF (singular), AVERAGE, SUMPRODUCT — claimed but not implemented
+    if "COUNTIF(" in fu and "COUNTIFS(" not in fu:
+        tags.append("unsupported_func:COUNTIF")
+    if "AVERAGE(" in fu and "AVERAGEIF" not in fu:
+        tags.append("partial_func:AVERAGE")
+    if "SUMPRODUCT(" in fu:
+        tags.append("unsupported_func:SUMPRODUCT")
+    if "#REF!" in fu:
+        tags.append("error:#REF!")
+    return tags
+
+
+def parse_sheet_cell_ref(ref_str, *, preserve_absolute: bool = False):
+    """
+    Parse a reference string like SQL_data!D:D or 'Warehouse Data'!$C:$C or Summary!$A$2 or B6.
+
+    Returns (sheet, col_letter, row_num, is_range) by default.
+
+    When preserve_absolute=True, returns
+      (sheet, col_letter, row_num, is_range, col_abs, row_abs)
+    so callers can distinguish $A$1 / A$1 / $A1 / A1.
+    """
+    original = str(ref_str)
+    # Detect absolute markers BEFORE stripping
+    cell_part_raw = original
+    sheet_name = None
+    if "!" in original:
+        parts = original.split("!")
+        sheet_name = parts[0].strip("'")
+        cell_part_raw = parts[1]
+
+    col_abs = False
+    row_abs = False
+    # Column range e.g. $D:$D
+    if ":" in cell_part_raw:
+        sub_parts = cell_part_raw.split(":")
+        left, right = sub_parts[0], sub_parts[1]
+        left_clean = left.replace("$", "")
+        if left_clean.isalpha() and right.replace("$", "").isalpha():
+            col_abs = "$" in left or "$" in right
+            result = (sheet_name, left_clean.upper(), None, True)
+            if preserve_absolute:
+                return result + (col_abs, False)
+            return result
+        col_letter = "".join(filter(str.isalpha, left_clean))
+        col_abs = left.startswith("$") or "$" in left[:2]
+        result = (sheet_name, col_letter.upper() if col_letter else None, None, True)
+        if preserve_absolute:
+            return result + (col_abs, False)
+        return result
+
+    # Single cell — parse $ markers from original cell part
+    m = re.match(r"^(\$)?([A-Za-z]+)(\$)?(\d+)$", cell_part_raw.strip())
+    if m:
+        col_abs = bool(m.group(1))
+        col_letter = m.group(2).upper()
+        row_abs = bool(m.group(3))
+        row_num = int(m.group(4))
+        result = (sheet_name, col_letter, row_num, False)
+        if preserve_absolute:
+            return result + (col_abs, row_abs)
+        return result
+
+    # Fallback: strip $ (legacy behavior)
+    clean_ref = original.replace("$", "")
+    sheet_name = None
+    cell_part = clean_ref
+    if "!" in clean_ref:
+        parts = clean_ref.split("!")
+        sheet_name = parts[0].strip("'")
+        cell_part = parts[1]
+    col_letter = "".join(filter(str.isalpha, cell_part))
+    row_num_str = "".join(filter(str.isdigit, cell_part))
+    row_num = int(row_num_str) if row_num_str else None
+    result = (sheet_name, col_letter.upper() if col_letter else None, row_num, False)
+    if preserve_absolute:
+        return result + (False, False)
+    return result
+
+
+def is_external_workbook_ref(ref_str: str) -> bool:
+    """True if the reference points at another workbook ([file.xlsx]...)."""
+    return bool(ref_str) and "[" in str(ref_str) and "]" in str(ref_str)
+
+
 def _parse_formula_with_library_impl(xl_model, sheet_name, cell_ref, formula_str,
-                                     current_row, ws_val, raw_column_maps, 
+                                     current_row, ws_val, raw_column_maps,
                                      table_col_mapping, table_name, ws_form=None,
                                      detected_tables=None):
     """
     Prefer the custom parser for SUMIFS/COUNTIFS/SUM/arithmetic so roles and
     filters are preserved. Use the formulas library only for unsupported types.
     """
+    unsupported = detect_unsupported_formula_features(formula_str)
     # Always use custom parser when it handles the formula — library path loses roles
-    if _custom_parser_handles(formula_str):
+    if _custom_parser_handles(formula_str) and not unsupported:
         return parse_formula(
             formula_str, current_row, ws_val,
             raw_column_maps, table_col_mapping, table_name,
             ws_form,
             detected_tables=detected_tables
         )
+
+    # Explicit unsupported — do not silently misclassify as ARITHMETIC
+    if unsupported and not _custom_parser_handles(formula_str):
+        return {
+            "type": "formula_based",
+            "formula_pattern": str(formula_str),
+            "data_source_sheet": "",
+            "data_source_columns": [],
+            "formula_source_details": [],
+            "formula_count": 1,
+            "resolved_by": "unsupported",
+            "unsupported_features": unsupported,
+        }
 
     deps = get_cell_dependencies(xl_model, sheet_name, cell_ref) if xl_model is not None else None
 
@@ -554,7 +674,10 @@ def _parse_formula_with_library_impl(xl_model, sheet_name, cell_ref, formula_str
             ws_form,
             detected_tables=detected_tables
         )
-        if result.get("resolved_by") in ("none", "custom_parser") and not result.get("data_source_columns"):
+        if unsupported:
+            result["resolved_by"] = "unsupported"
+            result["unsupported_features"] = unsupported
+        elif result.get("resolved_by") in ("none", "custom_parser") and not result.get("data_source_columns"):
             result["resolved_by"] = "degraded"
         return result
 
@@ -586,7 +709,8 @@ def _parse_formula_with_library_impl(xl_model, sheet_name, cell_ref, formula_str
             "data_source_columns": list(data_source_columns),
             "formula_source_details": formula_source_details,
             "formula_count": 1,
-            "resolved_by": "degraded",
+            "resolved_by": "unsupported" if unsupported else "degraded",
+            "unsupported_features": unsupported,
         }
 
     return parse_formula(
@@ -756,48 +880,6 @@ def extract_function_calls(formula_str, func_name):
             idx = pos + len(func_pattern)
             
     return calls
-
-
-def parse_sheet_cell_ref(ref_str):
-    """
-    Parse a reference string like SQL_data!D:D or 'Warehouse Data'!$C:$C or Summary!$A$2 or B6.
-    Returns (sheet, col_letter, row_num, is_range) or (None, None, None, False).
-
-    External workbook refs like '[Other.xlsx]Sheet'!A1 return sheet as
-    '[Other.xlsx]Sheet' (caller should detect '[' and mark references_external).
-    """
-    # Remove absolute signs for parsing (keep original for external detection)
-    clean_ref = ref_str.replace('$', '')
-    
-    sheet_name = None
-    cell_part = clean_ref
-    
-    if '!' in clean_ref:
-        parts = clean_ref.split('!')
-        sheet_name = parts[0].strip("'")
-        cell_part = parts[1]
-        
-    # Check if it is a column range e.g. D:D or C:C
-    if ':' in cell_part:
-        sub_parts = cell_part.split(':')
-        if sub_parts[0].isalpha() and sub_parts[1].isalpha():
-            return sheet_name, sub_parts[0].upper(), None, True
-        else:
-            # Row range or mixed range, let's extract column letter of first cell
-            col_letter = "".join(filter(str.isalpha, sub_parts[0]))
-            return sheet_name, col_letter.upper(), None, True
-            
-    # Single cell ref e.g. A2 or B6
-    col_letter = "".join(filter(str.isalpha, cell_part))
-    row_num_str = "".join(filter(str.isdigit, cell_part))
-    row_num = int(row_num_str) if row_num_str else None
-    
-    return sheet_name, col_letter.upper() if col_letter else None, row_num, False
-
-
-def is_external_workbook_ref(ref_str: str) -> bool:
-    """True if the reference points at another workbook ([file.xlsx]...)."""
-    return bool(ref_str) and "[" in str(ref_str) and "]" in str(ref_str)
 
 
 def translate_reference(ref_str, current_row, summary_ws_val, raw_column_maps, table_col_mapping, detected_tables=None):

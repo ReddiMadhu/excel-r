@@ -324,6 +324,29 @@ CREATE TABLE IF NOT EXISTS pairwise_overlap_cache (
     PRIMARY KEY (workbook_id_a, workbook_id_b),
     CHECK (workbook_id_a < workbook_id_b)
 );
+
+-- Table 16: excel_review_findings (cell/formula Excel Review — NOT portfolio governance)
+CREATE TABLE IF NOT EXISTS excel_review_findings (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    workbook_id         INTEGER NOT NULL,
+    finding_type        VARCHAR NOT NULL,
+    sheet               VARCHAR,
+    cell                VARCHAR,
+    severity            VARCHAR DEFAULT 'MEDIUM',
+    confidence          VARCHAR DEFAULT 'medium',
+    confidence_score    REAL,
+    actual              TEXT,
+    expected_pattern    TEXT,
+    evidence            JSON,
+    dependencies        JSON,
+    dependents          JSON,
+    signals             JSON,
+    status              VARCHAR DEFAULT 'OPEN',
+    detected_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(workbook_id) REFERENCES workbooks(id)
+);
+CREATE INDEX IF NOT EXISTS idx_excel_review_workbook ON excel_review_findings(workbook_id);
+CREATE INDEX IF NOT EXISTS idx_excel_review_type ON excel_review_findings(finding_type);
 """
 
 
@@ -474,6 +497,7 @@ class Database:
             try:
                 conn.execute("DELETE FROM governance_recommendations WHERE workbook_id = ?", (workbook_id,))
                 conn.execute("DELETE FROM governance_risks WHERE workbook_id = ?", (workbook_id,))
+                conn.execute("DELETE FROM excel_review_findings WHERE workbook_id = ?", (workbook_id,))
                 # Pairwise cache rows referencing this workbook
                 conn.execute(
                     "DELETE FROM pairwise_overlap_cache WHERE workbook_id_a = ? OR workbook_id_b = ?",
@@ -522,6 +546,7 @@ class Database:
             "workbook_clusters",
             "pairwise_overlap_cache",        # no FK deps
             "governance_risks",
+            "excel_review_findings",
             "kpi_cluster_cache",
             "calculated_fields",
             "columns",

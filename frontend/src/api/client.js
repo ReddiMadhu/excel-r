@@ -52,6 +52,16 @@ export const api = {
   getRisks: () => fetchJson('/api/governance/risks'),
   getPairwiseMatrix: (workbookIds) =>
     fetchJson(`/api/governance/pairwise${workbookIds ? '?workbook_ids=' + workbookIds : ''}`),
+
+  // Excel Review (cell/formula — distinct from governance review)
+  getExcelReviewFindings: (workbookId) =>
+    fetchJson(`/api/excel-review/findings${workbookId != null ? '?workbook_id=' + workbookId : ''}`),
+  getExcelReviewForWorkbook: (workbookId) =>
+    fetchJson(`/api/excel-review/findings/${workbookId}`),
+  getExcelReviewSummary: () => fetchJson('/api/excel-review/summary'),
+  runExcelReview: (workbookId) =>
+    fetchJson(`/api/excel-review/run${workbookId != null ? '?workbook_id=' + workbookId : ''}`, { method: 'POST' }),
+
   sendEmailToTeam: (data) => fetchJson('/api/governance/send-email', {
     method: 'POST',
     body: JSON.stringify(data),

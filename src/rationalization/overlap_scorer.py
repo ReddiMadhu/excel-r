@@ -33,10 +33,63 @@ from src.parsers.formula_lineage import LINEAGE_SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 
+# Bump when KPI/semantic/source-normalizer inputs to overlap change independently of file MD5
+OVERLAP_FEATURE_VERSION = "3.0-containment"
+
 
 def _lineage_hash_suffix() -> str:
-    """Include lineage schema version so cache invalidates on semantic fixes."""
-    return f"|lineage:{LINEAGE_SCHEMA_VERSION}"
+    """Include lineage + feature versions so cache invalidates on semantic/scoring fixes."""
+    return f"|lineage:{LINEAGE_SCHEMA_VERSION}|feat:{OVERLAP_FEATURE_VERSION}"
+
+
+def _kpi_cache_version(db: Database) -> str:
+    """Hash of KPI canonicalization state for cache invalidation."""
+    import hashlib
+    rows = db.query(
+        "SELECT original_name, canonical_name FROM kpi_cluster_cache ORDER BY original_name"
+    )
+    blob = "|".join(f"{r['original_name']}={r['canonical_name']}" for r in rows)
+    return hashlib.md5(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def _semantic_meta_version(db: Database, workbook_id: int) -> str:
+    """Include LOB/domain enrichment in hash so semantic score changes invalidate cache."""
+    import hashlib
+    row = db.query_one(
+        """
+        SELECT line_of_business, domain_classification, is_real_ai
+        FROM dashboards
+        WHERE workbook_id = ? AND sheet_type='summary_report'
+        ORDER BY id LIMIT 1
+        """,
+        (workbook_id,),
+    )
+    if not row:
+        return "nosem"
+    blob = f"{row.get('line_of_business')}|{row.get('domain_classification')}|{row.get('is_real_ai')}"
+    return hashlib.md5(blob.encode("utf-8")).hexdigest()[:8]
+
+
+def _workbook_overlap_hash(db: Database, workbook_id: int, kpi_ver: str) -> str:
+    row = db.query_one(
+        "SELECT file_hash_md5, extraction_quality_score, comparison_mode FROM workbooks WHERE id = ?",
+        (workbook_id,),
+    )
+    md5 = (row.get("file_hash_md5") or "") if row else ""
+    quality = row.get("extraction_quality_score") if row else None
+    mode = row.get("comparison_mode") if row else None
+    sem = _semantic_meta_version(db, workbook_id)
+    return (
+        f"{md5}{_lineage_hash_suffix()}"
+        f"|kpi:{kpi_ver}|sem:{sem}|q:{quality}|mode:{mode}"
+    )
+
+
+def containment_score(set_a: Set[str], set_b: Set[str]) -> float:
+    """Fraction of set_a contained in set_b. Empty set_a → 0.0 (never treat as fully contained)."""
+    if not set_a:
+        return 0.0
+    return len(set_a & set_b) / len(set_a)
 
 
 def _get_canonical_kpis_for_workbook(
@@ -55,25 +108,20 @@ def _get_canonical_kpis_for_workbook(
 
 def _get_raw_sources_for_workbook(
     db: Database, workbook_id: int
-) -> Set[str]:
+) -> Tuple[Set[str], str]:
     """
     Get normalized raw source set for a workbook.
 
+    Returns (sources, ds_overlap_mode) where mode is:
+      lineage | primary_inputs | header_fallback
+
     Source priority:
-      1. ultimate_raw_sources from calculated_fields — formula-lineage derived,
-         tracks exactly which raw columns each formula references.  This is the
-         gold standard for both pivot_value and formula_based columns.
-      2. primary_inputs from workbooks — manually tagged or inferred inputs.
-      3. Datasource column headers (fallback ONLY) — all column headers from raw
-         data sheets.  Only used when lineage extraction produced no sources at
-         all.  Including these unconditionally inflates Jaccard to ~100% for any
-         two workbooks sharing the same raw data sheet (e.g. a pivot table
-         workbook and a regular formula workbook both sitting on SQL_data), even
-         when their formulas reference entirely different columns.
+      1. ultimate_raw_sources from calculated_fields
+      2. primary_inputs from workbooks
+      3. Datasource column headers (fallback ONLY) — caps reliability
     """
     sources: Set[str] = set()
 
-    # 1. Formula-lineage sources (specific columns actually used by formulas)
     rows = db.query("""
         SELECT ultimate_raw_sources
         FROM calculated_fields
@@ -83,23 +131,23 @@ def _get_raw_sources_for_workbook(
     """, (workbook_id,))
     for r in rows:
         sources |= normalize_source_set(parse_json_list(r.get("ultimate_raw_sources")))
+    if sources:
+        return sources, "lineage"
 
-    # 2. Workbook-level primary inputs
     wb = db.query_one("SELECT primary_inputs FROM workbooks WHERE id = ?", (workbook_id,))
     if wb:
         sources |= normalize_source_set(parse_json_list(wb.get("primary_inputs")))
+    if sources:
+        return sources, "primary_inputs"
 
-    # 3. Fallback: raw datasource column headers, only when lineage is absent
-    if not sources:
-        ds_rows = db.query(
-            "SELECT name, column_headers FROM datasources WHERE workbook_id = ?",
-            (workbook_id,),
-        )
-        for ds in ds_rows:
-            headers = parse_json_list(ds.get("column_headers"))
-            sources |= normalize_datasource_headers(ds.get("name", ""), headers)
-
-    return sources
+    ds_rows = db.query(
+        "SELECT name, column_headers FROM datasources WHERE workbook_id = ?",
+        (workbook_id,),
+    )
+    for ds in ds_rows:
+        headers = parse_json_list(ds.get("column_headers"))
+        sources |= normalize_datasource_headers(ds.get("name", ""), headers)
+    return sources, "header_fallback"
 
 
 def _get_structural_outputs_for_workbook(db: Database, workbook_id: int) -> Set[str]:
@@ -289,22 +337,23 @@ def compute_pairwise_overlaps(
 
     kpi_rows = db.query("SELECT original_name, canonical_name FROM kpi_cluster_cache")
     kpi_cache = {r["original_name"]: r["canonical_name"] for r in kpi_rows}
+    kpi_ver = _kpi_cache_version(db)
 
-    # Get file hashes for cache lookup
+    # Get file hashes for cache lookup (includes KPI + semantic + quality)
     wb_hashes: Dict[int, str] = {}
     for wb in workbooks:
-        row = db.query_one("SELECT file_hash_md5 FROM workbooks WHERE id = ?", (wb["id"],))
-        wb_hashes[wb["id"]] = (row.get("file_hash_md5") or "" if row else "") + _lineage_hash_suffix()
+        wb_hashes[wb["id"]] = _workbook_overlap_hash(db, wb["id"], kpi_ver)
 
     wb_data: Dict[int, Dict[str, Any]] = {}
     for wb in workbooks:
         wb_id = wb["id"]
-        raw_sources = _get_raw_sources_for_workbook(db, wb_id)
+        raw_sources, ds_mode = _get_raw_sources_for_workbook(db, wb_id)
         semantic_features = get_workbook_semantic_features(db, wb_id, wb["name"])
         wb_data[wb_id] = {
             "name": wb["name"],
             "canonical_kpis": _get_canonical_kpis_for_workbook(db, wb_id),
             "raw_sources": raw_sources,
+            "ds_overlap_mode": ds_mode,
             "fingerprints": _get_fingerprints_for_workbook(db, wb_id),
             "structural_outputs": _get_structural_outputs_for_workbook(db, wb_id),
             "semantic_features": semantic_features,
@@ -336,13 +385,26 @@ def compute_pairwise_overlaps(
             kpi_a = data_a["canonical_kpis"]
             kpi_b = data_b["canonical_kpis"]
             kpi_overlap = jaccard_similarity(kpi_a, kpi_b)
+            kpi_containment_a = containment_score(kpi_a, kpi_b)
+            kpi_containment_b = containment_score(kpi_b, kpi_a)
             common_kpis = sorted(kpi_a & kpi_b)
             unique_kpis_a = sorted(kpi_a - kpi_b)
             unique_kpis_b = sorted(kpi_b - kpi_a)
 
             src_a = data_a["raw_sources"]
             src_b = data_b["raw_sources"]
+            ds_mode_a = data_a.get("ds_overlap_mode", "lineage")
+            ds_mode_b = data_b.get("ds_overlap_mode", "lineage")
             ds_overlap = jaccard_similarity(src_a, src_b)
+            ds_containment_a = containment_score(src_a, src_b)
+            ds_containment_b = containment_score(src_b, src_a)
+            # Header fallback is unreliable — cap score and flag
+            ds_overlap_mode = "lineage"
+            if ds_mode_a == "header_fallback" or ds_mode_b == "header_fallback":
+                ds_overlap_mode = "header_fallback"
+                ds_overlap = min(ds_overlap, 0.4)
+                ds_containment_a = min(ds_containment_a, 0.4)
+                ds_containment_b = min(ds_containment_b, 0.4)
             common_ds = list(src_a & src_b)
 
             struct_a = data_a["structural_outputs"]
@@ -367,13 +429,6 @@ def compute_pairwise_overlaps(
             combined_score = (
                 alpha * kpi_overlap + beta * ds_overlap
                 + gamma * fp_ratio + delta * structural_overlap
-            )
-
-            kpi_containment_a = (
-                len(kpi_a & kpi_b) / len(kpi_a) if kpi_a else 0.0
-            )
-            kpi_containment_b = (
-                len(kpi_a & kpi_b) / len(kpi_b) if kpi_b else 0.0
             )
 
             overlap_relationship = "distinct"
@@ -421,6 +476,11 @@ def compute_pairwise_overlaps(
             elif fp_ratio == 0 and kpi_overlap < 0.2:
                 overlap_class = "different"
 
+            # Header fallback must not auto-merge — force related/review band
+            if ds_overlap_mode == "header_fallback" and overlap_class in ("duplicate", "same", "merge_candidate"):
+                overlap_class = "related"
+                overlap_relationship = "related"
+
             entry = {
                 "kpi_overlap": kpi_overlap,
                 "ds_overlap": ds_overlap,
@@ -436,6 +496,9 @@ def compute_pairwise_overlaps(
                 "unique_kpis_b": unique_kpis_b,
                 "kpi_containment_a": round(kpi_containment_a, 4),
                 "kpi_containment_b": round(kpi_containment_b, 4),
+                "ds_containment_a": round(ds_containment_a, 4),
+                "ds_containment_b": round(ds_containment_b, 4),
+                "ds_overlap_mode": ds_overlap_mode,
                 "overlap_relationship": overlap_relationship,
                 "common_datasources": common_ds,
                 "ds_count_a": len(src_a),

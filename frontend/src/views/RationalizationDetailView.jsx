@@ -672,6 +672,13 @@ export default function RationalizationDetailView() {
       color: 'var(--accent-emerald)',
       iconClass: 'keep',
     },
+    review: {
+      icon: AlertTriangle,
+      title: 'Governance Review',
+      subtitle: 'Ambiguous portfolio overlap or low extraction quality — not cell-level Excel Review. Inspect reasons, scores, and fingerprints before deciding.',
+      color: '#3b82f6',
+      iconClass: 'review',
+    },
   };
 
   const config = typeConfig[type] || typeConfig.keep;

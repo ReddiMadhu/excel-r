@@ -17,6 +17,7 @@ export default function WorkbookDetailView() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { data: wb, loading } = useApi(() => api.getWorkbook(id), [id]);
+  const { data: reviewPayload } = useApi(() => api.getExcelReviewForWorkbook(id), [id]);
   const [activeSheet, setActiveSheet] = useState(null);
 
   if (loading || !wb) return <Loader />;
@@ -24,6 +25,7 @@ export default function WorkbookDetailView() {
   const dashboards = wb.dashboards || [];
   const selectedSheet = activeSheet !== null ? dashboards[activeSheet]
     : dashboards.length > 0 ? dashboards[0] : null;
+  const findings = reviewPayload?.findings || [];
 
   return (
     <div className="page-enter">
@@ -43,7 +45,46 @@ export default function WorkbookDetailView() {
           <MetaItem label="Calculated Fields" value={wb.calculated_field_count} />
           <MetaItem label="Datasources" value={wb.datasource_count} />
           <MetaItem label="VBA Macros" value={wb.has_vba_macros ? 'Yes' : 'No'} highlight={wb.has_vba_macros} />
+          <MetaItem label="Excel Review Findings" value={findings.length} highlight={findings.length > 0} />
         </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 24 }}>
+        <h3 style={{ marginBottom: 12 }}>Excel Review</h3>
+        {findings.length === 0 ? (
+          <p className="text-secondary" style={{ fontSize: '0.9rem' }}>
+            No review findings detected for this workbook (cell/formula inspection).
+            Portfolio keep/merge recommendations are separate under Rationalization.
+          </p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {findings.slice(0, 25).map(f => (
+              <div key={f.id} style={{ borderBottom: '1px solid var(--border-color, #333)', paddingBottom: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                  <strong>{f.finding_type}</strong>
+                  <span className="text-muted" style={{ fontSize: '0.8rem' }}>
+                    {f.sheet}{f.cell ? `!${f.cell}` : ''} · {f.severity} · conf {f.confidence}
+                  </span>
+                </div>
+                {f.actual != null && (
+                  <div style={{ fontSize: '0.85rem', marginTop: 4 }}>
+                    Actual: <code>{String(f.actual).slice(0, 160)}</code>
+                  </div>
+                )}
+                {f.expected_pattern && (
+                  <div style={{ fontSize: '0.85rem' }}>
+                    Expected: <code>{String(f.expected_pattern).slice(0, 160)}</code>
+                  </div>
+                )}
+              </div>
+            ))}
+            {findings.length > 25 && (
+              <button className="btn btn-ghost" onClick={() => navigate('/excel-review')}>
+                View all {findings.length} findings →
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {wb.external_links && wb.external_links.length > 0 && (

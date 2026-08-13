@@ -11,8 +11,9 @@ import { StatCard, Loader, EmptyState } from '../components/shared';
 import PageHeader from '../components/layout/PageHeader';
 
 export default function RationalizationView() {
-  const { data: recs, loading } = useApi(api.getRecommendations);
+  const { data: recs, loading, error } = useApi(api.getRecommendations);
   const { data: pairwise, loading: pwLoading } = useApi(api.getPairwiseMatrix);
+  const { data: agents } = useApi(api.getAgentsStatus);
   const navigate = useNavigate();
 
   // Email Modal states
@@ -224,11 +225,15 @@ export default function RationalizationView() {
   if (loading) return <Loader />;
 
   const totalFiltered = mergePairs.length + decommissionFiltered.length + keepRecs.length + reviewRecs.length;
+  const agentStatus = agents?.rationalization?.status;
+  const agentError = agents?.rationalization?.error;
+  const agentSummary = agents?.rationalization?.summary;
 
   return (
     <div className="page-enter">
       <PageHeader
-        title="Rationalization Results"
+        title="Portfolio Rationalization"
+        subtitle="Workbook-level merge / keep / decommission / governance review (not cell-level Excel Review)"
         actions={
           <button
             onClick={handleOpenEmailModal}
@@ -249,13 +254,43 @@ export default function RationalizationView() {
         }
       />
 
+      {error && (
+        <div className="agent-run-banner tone-error" style={{ margin: '0 0 1rem', padding: '0.75rem' }}>
+          Analysis Failed: {error}
+        </div>
+      )}
 
+      {(agentStatus === 'failed' || agentStatus === 'partial' || agentStatus === 'completed_with_warnings') && (
+        <div
+          className={`agent-run-banner ${agentStatus === 'failed' ? 'tone-error' : 'tone-warning'}`}
+          style={{ margin: '0 0 1rem', padding: '0.75rem' }}
+        >
+          {agentStatus === 'failed' && <>Analysis Failed{agentError ? `: ${agentError}` : ''}</>}
+          {agentStatus === 'partial' && <>Analysis Partially Completed{agentError ? `: ${agentError}` : ''}</>}
+          {agentStatus === 'completed_with_warnings' && (
+            <>Analysis Completed With Warnings{agentError ? `: ${agentError}` : ''}</>
+          )}
+          {agentSummary?.phase_errors?.length > 0 && (
+            <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.25rem' }}>
+              {agentSummary.phase_errors.map((e, i) => (
+                <li key={i}>{typeof e === 'string' ? e : `${e.phase}: ${e.error}`}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {(!recs || recs.length === 0) ? (
         <EmptyState
           icon={GitMerge}
-          title="No recommendations yet"
-          message="Upload multiple reports and the rationalization engine will produce recommendations."
+          title={error ? 'Could not load recommendations' : 'No recommendations yet'}
+          message={
+            error
+              ? 'The API failed — this is not the same as “no issues”.'
+              : agentStatus === 'failed'
+                ? 'Rationalization failed. Re-run the agent from the sidebar.'
+                : 'Upload multiple reports and run the Rationalization agent to produce portfolio recommendations. Cell-level Excel Review is under Discovery → Excel Review.'
+          }
         />
       ) : (
         <div>
@@ -314,16 +349,14 @@ export default function RationalizationView() {
                 activeClass="active-keep"
                 onClick={() => setActiveTab('keep')}
               />
-              {counts.review > 0 && (
-                <PillButton
-                  label="Review"
-                  count={reviewRecs.length}
-                  color="#3b82f6"
-                  active={activeTab === 'review'}
-                  activeClass="active-review"
-                  onClick={() => setActiveTab('review')}
-                />
-              )}
+              <PillButton
+                label="Governance Review"
+                count={reviewRecs.length}
+                color="#3b82f6"
+                active={activeTab === 'review'}
+                activeClass="active-review"
+                onClick={() => setActiveTab('review')}
+              />
             </div>
           </div>
 
@@ -417,10 +450,27 @@ export default function RationalizationView() {
               )}
               {activeTab === 'review' && (
                 <div className="ration-column">
-                  <ColumnHeader label="REVIEW" color="#3b82f6" count={reviewRecs.length} badge="review" badgeText="Needs Attention" />
+                  <ColumnHeader
+                    label="GOVERNANCE REVIEW"
+                    color="#3b82f6"
+                    count={reviewRecs.length}
+                    badge="review"
+                    badgeText="Needs Attention"
+                  />
                   {reviewRecs.length > 0 ? reviewRecs.map(rec => (
-                    <RecCard key={rec.id} rec={rec} type="review" kpiSharingMap={kpiSharingMap} />
-                  )) : <div className="ration-empty">No review recommendations</div>}
+                    <RecCard
+                      key={rec.id}
+                      rec={rec}
+                      type="review"
+                      onReview={() => goToReview(rec, 'review')}
+                      kpiSharingMap={kpiSharingMap}
+                    />
+                  )) : (
+                    <div className="ration-empty">
+                      No governance review items — ambiguous/low-quality portfolio decisions were not flagged.
+                      (This is not Excel cell review; see Discovery → Excel Review.)
+                    </div>
+                  )}
                 </div>
               )}
             </div>

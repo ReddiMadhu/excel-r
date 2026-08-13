@@ -147,9 +147,10 @@ def assign_roles_for_cluster(
 
     # ── Fetch raw sources for all members to compute containment ──
     from src.rationalization.overlap_scorer import _get_raw_sources_for_workbook
-    ds_sets: Dict[int, Set[str]] = {
-        wb_id: _get_raw_sources_for_workbook(db, wb_id) for wb_id in member_ids
-    }
+    ds_sets: Dict[int, Set[str]] = {}
+    for wb_id in member_ids:
+        sources, _mode = _get_raw_sources_for_workbook(db, wb_id)
+        ds_sets[wb_id] = sources
 
     # ── Cluster-union KPI computation (GAP-02 fix) ────────────
     kpi_sets: Dict[int, Set[str]] = {
@@ -173,14 +174,17 @@ def assign_roles_for_cluster(
             continue
 
         quality = wb_map.get(wb_id, {}).get("extraction_quality_score")
+        comparison_mode = wb_map.get(wb_id, {}).get("comparison_mode")
         if quality is None:
-            quality = 1.0
+            # Missing quality → cannot safely decommission/merge; force review
+            quality = 0.0
 
         # Containment: what fraction of M's KPIs are covered by the full cluster?
+        # Empty KPI set must NOT count as fully contained (was 1.0 — dangerous).
         my_kpis = kpi_sets[wb_id]
         kpi_containment_in_cluster = (
             len(my_kpis & cluster_kpi_union) / len(my_kpis)
-            if my_kpis else 1.0  # empty KPI set → treat as contained
+            if my_kpis else 0.0
         )
         unique_kpis = unique_to_member(wb_id)
 
@@ -190,18 +194,30 @@ def assign_roles_for_cluster(
         canonical_sources = ds_sets[canonical_id]
         ds_containment_with_canonical = (
             len(my_sources & canonical_sources) / len(my_sources)
-            if my_sources else 1.0
+            if my_sources else 0.0
         )
 
         # Priority order
         role: str
         reasons: List[str] = []
 
-        if quality < min_quality:
+        if comparison_mode == "insufficient" or quality < min_quality:
+            role = "review"
+            if comparison_mode == "insufficient":
+                reasons.append(
+                    f"comparison_mode=insufficient — Governance Review required "
+                    f"(extraction quality {quality:.0%})."
+                )
+            else:
+                reasons.append(
+                    f"Extraction quality {quality:.0%} below {min_quality:.0%} — "
+                    "manual Governance Review required before decommission."
+                )
+
+        elif not my_kpis:
             role = "review"
             reasons.append(
-                f"Extraction quality {quality:.0%} below {min_quality:.0%} — "
-                "manual review required before decommission."
+                "No KPIs extracted for this workbook — cannot assess redundancy."
             )
 
         elif kpi_containment_in_cluster >= 1.0 and ds_containment_with_canonical >= decomm_ds_thresh:
@@ -221,7 +237,7 @@ def assign_roles_for_cluster(
         else:
             role = "review"
             reasons.append(
-                "Ambiguous overlap within cluster — manual review required."
+                "Ambiguous overlap within cluster — Governance Review required."
             )
 
         decisions[wb_id] = {
@@ -259,7 +275,7 @@ def assign_roles_for_cluster(
                 my_kpis = kpi_sets[wb_id]
                 kpi_containment_in_cluster = (
                     len(my_kpis & cluster_kpi_union) / len(my_kpis)
-                    if my_kpis else 1.0
+                    if my_kpis else 0.0
                 )
                 ds_overlap_with_canonical = _ds_overlap(pairwise, wb_id, canonical_id)
                 
@@ -267,20 +283,26 @@ def assign_roles_for_cluster(
                 canonical_sources = ds_sets[canonical_id]
                 ds_containment_with_canonical = (
                     len(my_sources & canonical_sources) / len(my_sources)
-                    if my_sources else 1.0
+                    if my_sources else 0.0
                 )
                 
                 quality = wb_map.get(wb_id, {}).get("extraction_quality_score")
                 if quality is None:
                     quality = 0.0  # missing ⇒ never prefer for decommission
+                comparison_mode = wb_map.get(wb_id, {}).get("comparison_mode")
 
-                if quality < min_quality:
-                    role, reasons = "review", [f"Extraction quality {quality:.0%} below threshold."]
+                if comparison_mode == "insufficient" or quality < min_quality:
+                    role, reasons = "review", [
+                        f"Extraction quality {quality:.0%} / mode={comparison_mode} — "
+                        "Governance Review required."
+                    ]
+                elif not my_kpis:
+                    role, reasons = "review", ["No KPIs extracted — cannot assess redundancy."]
                 elif kpi_containment_in_cluster >= 1.0 and ds_containment_with_canonical >= decomm_ds_thresh:
                     role = "decommission"
                     reasons = [f"All KPIs covered by cluster canonical target (datasource containment {ds_containment_with_canonical:.0%})."]
                 else:
-                    role, reasons = "review", ["Ambiguous — manual review required."]
+                    role, reasons = "review", ["Ambiguous — Governance Review required."]
 
                 decisions[wb_id] = {
                     "workbook_id": wb_id,
@@ -350,14 +372,14 @@ def run_cluster_recommendations(
     if workbook_ids:
         placeholders = ",".join("?" * len(workbook_ids))
         workbooks = db.query(
-            f"SELECT id, name, purpose, extraction_quality_score, extraction_complexity "
-            f"FROM workbooks WHERE id IN ({placeholders})",
+            f"SELECT id, name, purpose, extraction_quality_score, extraction_complexity, "
+            f"comparison_mode FROM workbooks WHERE id IN ({placeholders})",
             tuple(workbook_ids),
         )
     else:
         workbooks = db.query(
-            "SELECT id, name, purpose, extraction_quality_score, extraction_complexity "
-            "FROM workbooks"
+            "SELECT id, name, purpose, extraction_quality_score, extraction_complexity, "
+            "comparison_mode FROM workbooks"
         )
     wb_map = {wb["id"]: wb for wb in workbooks}
 

@@ -14,11 +14,12 @@ const EMPTY_METRICS = {
   mergeCount: null,
   decommissionCount: null,
   reviewCount: null,
+  excelReviewCount: null,
   agentStatus: null,
 };
 
 function aggregateMetrics(results) {
-  const [workbooks, datasources, dashboards, calcFields, kpiClusters, recommendations, agentsStatus] = results;
+  const [workbooks, datasources, dashboards, calcFields, kpiClusters, recommendations, agentsStatus, excelSummary] = results;
 
   const metrics = { ...EMPTY_METRICS };
 
@@ -60,6 +61,10 @@ function aggregateMetrics(results) {
     metrics.reviewCount = recs.filter(r => r.action === 'review').length;
   }
 
+  if (excelSummary.status === 'fulfilled' && excelSummary.value) {
+    metrics.excelReviewCount = excelSummary.value.findings ?? 0;
+  }
+
   metrics.agentStatus = agentsStatus.status === 'fulfilled' ? agentsStatus.value : null;
 
   return metrics;
@@ -80,6 +85,7 @@ export function useSidebarMetrics() {
         api.getKpiClusters(),
         api.getRecommendations(),
         api.getAgentsStatus(),
+        api.getExcelReviewSummary(),
       ]);
       setMetrics(aggregateMetrics(results));
     } catch {

@@ -54,7 +54,7 @@ class AgentOrchestrator:
                 if count == 0:
                     state.update(self._empty_agent_state())
                 elif state["workbook_count_at_run"] != count:
-                    if state["status"] == "completed":
+                    if state["status"] in ("completed", "completed_with_warnings", "partial"):
                         state["status"] = "stale"
                 elif state["status"] == "idle" and count > 0:
                     state["status"] = "pending"
@@ -135,14 +135,42 @@ class AgentOrchestrator:
                 summary = engine.run_intelligence(workbook_ids)
             else:
                 summary = engine.run_rationalization(workbook_ids)
+            # Map pipeline terminal status onto agent status.
+            # Never treat FAILED/PARTIAL as a clean "completed".
+            pipeline_status = (summary or {}).get("status", "completed")
+            if pipeline_status in ("failed",):
+                agent_status = "failed"
+            elif pipeline_status in ("partial", "completed_with_warnings"):
+                agent_status = pipeline_status
+            elif pipeline_status == "skipped":
+                agent_status = "idle"
+            else:
+                agent_status = "completed"
+
+            error_msg = None
+            if agent_status == "failed":
+                errs = (summary or {}).get("phase_errors") or []
+                error_msg = "; ".join(
+                    e.get("error", str(e)) if isinstance(e, dict) else str(e)
+                    for e in errs
+                ) or "Pipeline failed"
+            elif agent_status in ("partial", "completed_with_warnings"):
+                warns = (summary or {}).get("warnings") or []
+                errs = (summary or {}).get("phase_errors") or []
+                parts = []
+                for e in errs:
+                    parts.append(e.get("error", str(e)) if isinstance(e, dict) else str(e))
+                parts.extend(str(w) for w in warns)
+                error_msg = "; ".join(parts) if parts else None
+
             with self._lock:
                 state = self._state[agent_id]
-                state["status"] = "completed"
+                state["status"] = agent_status
                 state["last_run_at"] = datetime.utcnow().isoformat()
                 state["workbook_count_at_run"] = self._current_workbook_count()
                 state["summary"] = summary
-                state["error"] = None
-            logger.info("Agent '%s' completed", agent_id)
+                state["error"] = error_msg
+            logger.info("Agent '%s' finished with status=%s", agent_id, agent_status)
         except Exception as e:
             logger.exception("Agent '%s' failed: %s", agent_id, e)
             with self._lock:

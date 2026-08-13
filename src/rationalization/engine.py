@@ -35,6 +35,39 @@ from src.rationalization.cluster_recommender import run_cluster_recommendations
 
 logger = logging.getLogger(__name__)
 
+# Pipeline execution statuses — never report "completed" after a mandatory-phase failure.
+STATUS_QUEUED = "queued"
+STATUS_RUNNING = "running"
+STATUS_COMPLETED = "completed"
+STATUS_COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+STATUS_PARTIAL = "partial"
+STATUS_FAILED = "failed"
+STATUS_SKIPPED = "skipped"
+
+# Mandatory when workbook count >= 2. LLM stages are optional (warnings only).
+MANDATORY_PHASES_MULTI = ("overlap_scoring", "cluster_formation", "role_assignment", "writing_recommendations")
+OPTIONAL_PHASES = ("risk_detection", "llm_cluster_validation", "llm_justification")
+
+
+def _finalize_pipeline_status(summary: Dict[str, Any], mandatory_failed: List[str], warnings: List[str]) -> Dict[str, Any]:
+    """Derive honest terminal status from phase outcomes."""
+    summary["phase_errors"] = list(summary.get("phase_errors") or [])
+    summary["warnings"] = list(warnings)
+    if mandatory_failed:
+        summary["mandatory_failures"] = mandatory_failed
+        # Partial write happened if we have some recommendations but a later mandatory phase failed
+        if summary.get("recommendations") and "writing_recommendations" not in mandatory_failed:
+            summary["status"] = STATUS_PARTIAL
+        elif "writing_recommendations" in mandatory_failed and summary.get("role_assignments"):
+            summary["status"] = STATUS_PARTIAL
+        else:
+            summary["status"] = STATUS_FAILED
+    elif warnings:
+        summary["status"] = STATUS_COMPLETED_WITH_WARNINGS
+    else:
+        summary["status"] = STATUS_COMPLETED
+    return summary
+
 
 def _parse_user_groups(val) -> List[str]:
     if val is None:
@@ -269,24 +302,52 @@ class RationalizationEngine:
     def run_rationalization(self, workbook_ids: Optional[List[int]] = None) -> dict:
         """
         BI Rationalization agent — Phases 0–7.
+
+        Terminal status is never blindly "completed":
+          completed | completed_with_warnings | partial | failed | skipped
+        Mandatory phases (count>=2): overlap, cluster, role assignment, write.
+        LLM stages are optional — failure becomes a warning only.
         """
         count = self._workbook_count(workbook_ids)
         if count == 0:
             logger.info("No workbooks in scope — skipping rationalization")
-            return {"status": "skipped", "reason": "no workbooks", "agent": "rationalization"}
+            return {"status": STATUS_SKIPPED, "reason": "no workbooks", "agent": "rationalization"}
 
         logger.info("Starting Rationalization pipeline (%d workbook(s))", count)
         summary: Dict[str, Any] = {
-            "status": "completed",
+            "status": STATUS_RUNNING,
             "agent": "rationalization",
             "workbooks": count,
             "workbook_ids": workbook_ids,
+            "phase_errors": [],
+            "warnings": [],
         }
+        mandatory_failed: List[str] = []
+        warnings: List[str] = []
+
+        def _record_error(phase: str, exc: Exception, *, mandatory: bool) -> None:
+            msg = f"{phase}: {exc}"
+            summary["phase_errors"].append({"phase": phase, "error": str(exc), "mandatory": mandatory})
+            legacy_key = {
+                "risk_detection": "risk_error",
+                "overlap_scoring": "overlap_error",
+                "cluster_formation": "cluster_error",
+                "llm_cluster_validation": "llm_stage1_error",
+                "role_assignment": "role_error",
+                "llm_justification": "llm_stage2_error",
+                "writing_recommendations": "write_error",
+            }.get(phase)
+            if legacy_key:
+                summary[legacy_key] = str(exc)
+            if mandatory:
+                mandatory_failed.append(phase)
+            else:
+                warnings.append(msg)
 
         # ── Atomic truncation before re-run ───────────────────
         self._clear_cluster_data()
 
-        # ── Phase 0: Risk Detection ───────────────────────────
+        # ── Phase 0: Risk Detection (optional — warning on failure) ──
         self._set_phase("risk_detection")
         logger.info("── Phase 0: Risk Detection ──")
         try:
@@ -294,7 +355,7 @@ class RationalizationEngine:
             summary["risks_detected"] = len(risks)
         except Exception as e:
             logger.exception("Risk detection failed: %s", e)
-            summary["risk_error"] = str(e)
+            _record_error("risk_detection", e, mandatory=False)
 
         if count == 1:
             logger.info("Only 1 workbook — singleton cluster, 'keep' recommendation")
@@ -318,16 +379,21 @@ class RationalizationEngine:
                     "cluster_id": cluster_id,
                     "cluster_role": "keep",
                     "canonical_target_id": wb["id"],
-                    "reasons": json.dumps(["Only workbook in portfolio — no redundancy possible."]),
+                    "reasons": json.dumps([
+                        "Only workbook in portfolio — no redundancy possible. "
+                        "Excel Review (cell/formula inspection) is a separate pipeline."
+                    ]),
                     "uniqueness_score": 1.0,
                     "kpi_overlap_score": 0.0,
                     "datasource_overlap_score": 0.0,
                 })
             summary["recommendations"] = 1
-            self._set_phase("completed")
+            summary["actions"] = {"keep": 1, "merge": 0, "decommission": 0, "review": 0}
+            _finalize_pipeline_status(summary, mandatory_failed, warnings)
+            self._set_phase(summary["status"])
             return summary
 
-        # ── Phase 2: Overlap Scoring ──────────────────────────
+        # ── Phase 2: Overlap Scoring (mandatory) ──────────────
         self._set_phase("overlap_scoring")
         logger.info("── Phase 2: Overlap Scoring (5-signal + cache) ──")
         pairwise: Dict[Tuple[int, int], Dict[str, Any]] = {}
@@ -345,9 +411,15 @@ class RationalizationEngine:
             summary["uniqueness_scores"] = len(uniqueness)
         except Exception as e:
             logger.exception("Overlap scoring failed: %s", e)
-            summary["overlap_error"] = str(e)
+            _record_error("overlap_scoring", e, mandatory=True)
 
-        # ── Phase 3: Cluster Formation ─────────────────────────
+        # Stop early if overlap failed — empty pairwise would produce false "keep" for all
+        if "overlap_scoring" in mandatory_failed:
+            _finalize_pipeline_status(summary, mandatory_failed, warnings)
+            self._set_phase(summary["status"])
+            return summary
+
+        # ── Phase 3: Cluster Formation (mandatory) ─────────────
         self._set_phase("cluster_formation")
         logger.info("── Phase 3: Cluster Formation ──")
         clusters: List[Dict[str, Any]] = []
@@ -359,9 +431,14 @@ class RationalizationEngine:
             summary["singleton_clusters"] = sum(1 for c in clusters if c["cluster_size"] == 1)
         except Exception as e:
             logger.exception("Cluster formation failed: %s", e)
-            summary["cluster_error"] = str(e)
+            _record_error("cluster_formation", e, mandatory=True)
 
-        # ── Phase 4: LLM Stage 1 — Cluster Validation ─────────
+        if "cluster_formation" in mandatory_failed:
+            _finalize_pipeline_status(summary, mandatory_failed, warnings)
+            self._set_phase(summary["status"])
+            return summary
+
+        # ── Phase 4: LLM Stage 1 — Cluster Validation (optional) ─
         self._set_phase("llm_cluster_validation")
         logger.info("── Phase 4: LLM Stage 1 — Cluster Validation ──")
         if self.use_llm and self._llm_caller:
@@ -369,11 +446,12 @@ class RationalizationEngine:
                 clusters = self._run_llm_stage1(clusters, pairwise)
             except Exception as e:
                 logger.exception("LLM Stage 1 failed: %s", e)
-                summary["llm_stage1_error"] = str(e)
+                _record_error("llm_cluster_validation", e, mandatory=False)
         else:
             logger.info("LLM disabled — skipping Stage 1")
+            warnings.append("llm_cluster_validation: LLM disabled — skipped")
 
-        # ── Phase 5: Role Assignment ───────────────────────────
+        # ── Phase 5: Role Assignment (mandatory) ───────────────
         self._set_phase("role_assignment")
         logger.info("── Phase 5: Intra-Cluster Role Assignment ──")
         decisions: List[Dict[str, Any]] = []
@@ -384,9 +462,14 @@ class RationalizationEngine:
             summary["role_assignments"] = len(decisions)
         except Exception as e:
             logger.exception("Role assignment failed: %s", e)
-            summary["role_error"] = str(e)
+            _record_error("role_assignment", e, mandatory=True)
 
-        # ── Phase 6: LLM Stage 2 — Per-Workbook Justification ──
+        if "role_assignment" in mandatory_failed:
+            _finalize_pipeline_status(summary, mandatory_failed, warnings)
+            self._set_phase(summary["status"])
+            return summary
+
+        # ── Phase 6: LLM Stage 2 — Justification only (optional) ──
         self._set_phase("llm_justification")
         logger.info("── Phase 6: LLM Stage 2 — Per-Workbook Justification ──")
         if self.use_llm and self._llm_caller:
@@ -394,11 +477,12 @@ class RationalizationEngine:
                 decisions = self._run_llm_stage2(clusters, decisions, pairwise)
             except Exception as e:
                 logger.exception("LLM Stage 2 failed: %s", e)
-                summary["llm_stage2_error"] = str(e)
+                _record_error("llm_justification", e, mandatory=False)
         else:
             logger.info("LLM disabled — skipping Stage 2")
+            warnings.append("llm_justification: LLM disabled — skipped")
 
-        # ── Phase 7: Write governance_recommendations ──────────
+        # ── Phase 7: Write governance_recommendations (mandatory) ──
         self._set_phase("writing_recommendations")
         logger.info("── Phase 7: Writing Recommendations ──")
         try:
@@ -412,9 +496,10 @@ class RationalizationEngine:
             }
         except Exception as e:
             logger.exception("Writing recommendations failed: %s", e)
-            summary["write_error"] = str(e)
+            _record_error("writing_recommendations", e, mandatory=True)
 
-        self._set_phase("completed")
+        _finalize_pipeline_status(summary, mandatory_failed, warnings)
+        self._set_phase(summary["status"])
         return summary
 
     # ─── LLM Stage 1: Cluster Membership Validation ──────────────────
@@ -561,13 +646,17 @@ class RationalizationEngine:
                     wb_id = name_to_id.get(wb_name)
                     if wb_id and wb_id in dec_map:
                         d = dec_map[wb_id]
-                        final_action = item.get("final_action", d["action"])
-                        # Enforce override gating
-                        if d["cluster_role"] == "canonical_target":
-                            final_action = d["action"]  # cannot override
-                        d["action"] = final_action
+                        # LLM may JUSTIFY only — never change deterministic action.
+                        # Ignoring final_action prevents inventing governance decisions.
+                        suggested = item.get("final_action")
+                        if suggested and suggested != d["action"]:
+                            logger.info(
+                                "LLM suggested final_action=%s for %s but deterministic "
+                                "action=%s is preserved (no ungated override)",
+                                suggested, wb_name, d["action"],
+                            )
                         d["llm_justification"] = item.get("justification", "")
-                        d["llm_override"] = (final_action != d["action"])
+                        d["llm_override"] = False
                         d["ai_summary"] = item.get("ai_summary", "")
                         d["domain_classification"] = item.get("domain_classification", "")
                         d["line_of_business"] = item.get("line_of_business", "")
@@ -626,7 +715,7 @@ class RationalizationEngine:
                 matching_fps = pw.get("matching_fingerprints", [])
 
             from src.rationalization.overlap_scorer import _get_raw_sources_for_workbook
-            raw_sources = _get_raw_sources_for_workbook(self.db, wb_id)
+            raw_sources, _ds_mode = _get_raw_sources_for_workbook(self.db, wb_id)
             ds_sources_count = len(raw_sources)
             ds_shared_count = len(common_ds)
 

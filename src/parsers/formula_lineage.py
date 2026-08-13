@@ -206,7 +206,8 @@ def detect_computation_type(formula_str):
 
     Returns one of:
       SUMIFS, COUNTIFS, SUM_RANGE, ARITHMETIC, RATIO,
-      MULTI_AGG, PASS_THROUGH, CONDITIONAL, CONSTANT, LOOKUP, UNKNOWN
+      MULTI_AGG, PASS_THROUGH, CONDITIONAL, CONSTANT, LOOKUP,
+      UNKNOWN, DYNAMIC, UNSUPPORTED
     """
     if not formula_str:
         return "UNKNOWN"
@@ -218,6 +219,11 @@ def detect_computation_type(formula_str):
         return "CONSTANT"
     except ValueError:
         pass
+    # Explicit unsupported modern Excel
+    if any(fn in fu for fn in ("XLOOKUP(", "XMATCH(", "FILTER(", "LAMBDA(", "LET(")):
+        return "UNSUPPORTED"
+    if "[@" in formula_str or re.search(r"\b[A-Za-z_][\w]*\[", formula_str):
+        return "UNSUPPORTED"
     if "VLOOKUP(" in fu or "HLOOKUP(" in fu or ("INDEX(" in fu and "MATCH(" in fu):
         return "LOOKUP"
     if "INDIRECT(" in fu or "OFFSET(" in fu:
@@ -227,10 +233,15 @@ def detect_computation_type(formula_str):
         return "MULTI_AGG"
     if sumifs_count == 1:
         return "SUMIFS"
-    if "COUNTIFS(" in fu or "COUNTIF(" in fu:
+    if "COUNTIFS(" in fu:
         return "COUNTIFS"
+    if "COUNTIF(" in fu:
+        return "UNSUPPORTED"  # singular COUNTIF not fully parsed
     if "SUM(" in fu:
         return "SUM_RANGE"
+    # Conditional IF whose core is not stripped to another type
+    if fu.startswith("IF("):
+        return "CONDITIONAL"
     # Pass-through: single cell reference
     if re.fullmatch(r"'?[A-Za-z0-9_ ]*'?!?\$?[A-Z]+\$?\d+", f):
         return "PASS_THROUGH"
@@ -455,7 +466,20 @@ def build_fingerprint(computation_type, computation_params, ultimate_raw_sources
         if group_by:
             parts.append("GROUP_BY:" + ",".join(group_by))
     elif computation_type == "ARITHMETIC":
+        # Operator/function skeleton so =B2*C2 and =B2+C2 do not collide
+        skeleton = ""
+        if formula_str:
+            skeleton = re.sub(
+                r"(?:'[^']+'|[A-Za-z0-9_\-]+!)?"
+                r"\$?[A-Z]+\$?\d+(?::\$?[A-Z]+\$?\d+)?",
+                "REF",
+                str(formula_str).upper(),
+            )
+            skeleton = re.sub(r"\s+", "", skeleton)
+            skeleton = re.sub(r"REF", "R", skeleton)
         norm_sources = sorted([_nfp(s) for s in ultimate_raw_sources])
+        if skeleton:
+            parts.append("EXPR:" + skeleton[:120])
         parts.append("USES:" + ",".join(norm_sources))
     elif computation_type == "PASS_THROUGH":
         parts.append(f"REF:{_nfp(computation_params.get('points_to_column', ''))}")
@@ -468,7 +492,7 @@ def build_fingerprint(computation_type, computation_params, ultimate_raw_sources
     elif computation_type == "RATIO":
         norm_sources = sorted([_nfp(s) for s in ultimate_raw_sources])
         parts.append("USES:" + ",".join(norm_sources))
-    elif computation_type in ("LOOKUP", "UNKNOWN", "DYNAMIC", "CONDITIONAL"):
+    elif computation_type in ("LOOKUP", "UNKNOWN", "DYNAMIC", "CONDITIONAL", "UNSUPPORTED"):
         return build_degraded_fingerprint(
             computation_type, computation_params, ultimate_raw_sources,
             function_chain=function_chain, formula_str=formula_str,
@@ -609,8 +633,10 @@ def build_formula_lineage(parsed_result, formula_str, all_column_index):
         )
 
     resolved_by = parsed_result.get("resolved_by", "custom_parser")
-    if computation_type in ("LOOKUP", "UNKNOWN", "DYNAMIC"):
+    if computation_type in ("LOOKUP", "UNKNOWN", "DYNAMIC", "CONDITIONAL"):
         resolved_by = "degraded"
+    if computation_type == "UNSUPPORTED" or parsed_result.get("unsupported_features"):
+        resolved_by = "unsupported"
 
     lineage = {
         "computation_type": computation_type,
@@ -622,6 +648,8 @@ def build_formula_lineage(parsed_result, formula_str, all_column_index):
         "resolved_by": resolved_by,
         "lineage_schema_version": LINEAGE_SCHEMA_VERSION,
     }
+    if parsed_result.get("unsupported_features"):
+        lineage["unsupported_features"] = parsed_result["unsupported_features"]
     if wrapper_type:
         lineage["wrapper"] = wrapper_type
     if parsed_result.get("references_external"):

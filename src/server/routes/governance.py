@@ -170,17 +170,33 @@ async def get_pairwise_matrix(
     if wb_id_list:
         workbooks = [w for w in workbooks if w["id"] in wb_id_list]
 
-    # Try cache first
+    # Try cache first — but only rows whose hashes still match current inputs
+    from src.rationalization.overlap_scorer import _kpi_cache_version, _workbook_overlap_hash
+
     cache_rows = db.query(
         "SELECT * FROM pairwise_overlap_cache ORDER BY workbook_id_a, workbook_id_b"
     )
     wb_id_set = {w["id"] for w in workbooks}
+    kpi_ver = _kpi_cache_version(db)
+    current_hashes = {w["id"]: _workbook_overlap_hash(db, w["id"], kpi_ver) for w in workbooks}
 
     pairs = []
+    stale_count = 0
     if cache_rows:
         for row in cache_rows:
             id_a, id_b = row["workbook_id_a"], row["workbook_id_b"]
             if wb_id_list and (id_a not in wb_id_set or id_b not in wb_id_set):
+                continue
+            if id_a not in current_hashes or id_b not in current_hashes:
+                continue
+            # Reject stale cache entries
+            h_a, h_b = current_hashes[id_a], current_hashes[id_b]
+            if id_a < id_b:
+                expect_a, expect_b = h_a, h_b
+            else:
+                expect_a, expect_b = h_b, h_a
+            if row.get("hash_a") != expect_a or row.get("hash_b") != expect_b:
+                stale_count += 1
                 continue
             name_a = next((w["name"] for w in workbooks if w["id"] == id_a), str(id_a))
             name_b = next((w["name"] for w in workbooks if w["id"] == id_b), str(id_b))
@@ -202,8 +218,10 @@ async def get_pairwise_matrix(
                 unique_kpis_a=_pj(row.get("unique_kpis_a")) or [],
                 unique_kpis_b=_pj(row.get("unique_kpis_b")) or [],
             ))
-    else:
-        # Fall back to live computation
+    if not pairs:
+        # Fall back to live computation (also refreshes cache)
+        if stale_count:
+            logger.info("Pairwise API rejected %d stale cache rows — recomputing", stale_count)
         pairwise = compute_pairwise_overlaps(db, workbook_ids=wb_id_list)
         for (id_a, id_b), overlap in pairwise.items():
             pairs.append(PairwiseOverlap(

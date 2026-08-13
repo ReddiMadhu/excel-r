@@ -69,6 +69,18 @@ class ExtractionService:
                     output_json, scan_id, self.db, json_output_path=json_path
                 )
 
+            # Excel Review (cell/formula) — independent of portfolio rationalization
+            review_summary = None
+            try:
+                from src.review.engine import run_excel_review
+                with timer.step("excel_review"):
+                    review_summary = run_excel_review(
+                        self.db, workbook_id, file_path=file_path
+                    )
+            except Exception as e:
+                logger.exception("Excel Review failed for '%s'", file_name)
+                review_summary = {"status": "failed", "error": str(e), "findings": 0}
+
             timer.finish("EXTRACTION_TOTAL")
             return {
                 "status": "extracted",
@@ -76,6 +88,7 @@ class ExtractionService:
                 "workbook_id": workbook_id,
                 "warnings_count": len(warnings) if warnings else 0,
                 "json_path": json_path,
+                "excel_review": review_summary,
             }
 
         except Exception as e:

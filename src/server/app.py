@@ -80,6 +80,7 @@ def create_app() -> FastAPI:
     from src.server.routes import agents
     from src.server.routes import discovery
     from src.server.routes import data_management
+    from src.server.routes import excel_review
 
     app.include_router(scans.router)
     app.include_router(workbooks.router)
@@ -93,6 +94,7 @@ def create_app() -> FastAPI:
     app.include_router(agents.router)
     app.include_router(discovery.router)
     app.include_router(data_management.router)
+    app.include_router(excel_review.router)
 
     # Health check endpoint
     @app.get("/api/health", tags=["Health"])

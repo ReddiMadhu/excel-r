@@ -39,6 +39,7 @@ export default function App() {
                 <Route path="/intelligence/tables" element={<Navigate to="/intelligence" replace />} />
                 <Route path="/rationalization" element={<AgentWorkspaceView agentId="rationalization" />} />
                 <Route path="/rationalization/review/:type/:id" element={<RationalizationDetailView />} />
+                <Route path="/excel-review" element={<AgentWorkspaceView agentId="discovery" />} />
                 <Route path="/overlap-analysis" element={<OverlapAnalysisView />} />
                 <Route path="/overlap-analysis/cluster/:clusterId" element={<ClusterDetailView />} />
                 <Route path="/workbooks/:id" element={<WorkbookDetailView />} />
