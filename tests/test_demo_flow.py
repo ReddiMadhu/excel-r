@@ -162,22 +162,22 @@ class TestEndToEndCaching(unittest.TestCase):
             "status": "extracting",
         })
 
-        # --- 2nd run: Cache Hit (load from cache) ---
-        print("Running second extraction (Cache Hit)...")
+        # --- 2nd run: always full extraction (cache/skip removed) ---
+        print("Running second extraction (full extract again)...")
         res2 = self.extractor.extract_and_store(file_path, scan_db_id_2, scan_id_str="test-scan-id-2")
-        self.assertEqual(res2["status"], "cached")
+        self.assertEqual(res2["status"], "extracted")
         workbook_id_2 = res2["workbook_id"]
         self.assertTrue(workbook_id_2 > 0)
 
-        # Get DB counts after cache hit run
+        # Get DB counts after second full run
         counts_hit = self.get_db_counts()
-        print("Database counts (Cache Hit):", counts_hit)
+        print("Database counts (2nd full extract):", counts_hit)
 
-        # Compare both counts to make sure cache hit populated the DB identically!
+        # Compare both counts — same file should produce same DB shape
         for tbl in counts_miss:
             self.assertEqual(counts_miss[tbl], counts_hit[tbl], f"Mismatch in table {tbl} count!")
 
-        print("Verification successful: DB populated identically from cache!")
+        print("Verification successful: DB populated identically from full re-extraction!")
 
 
 if __name__ == "__main__":

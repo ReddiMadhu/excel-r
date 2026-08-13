@@ -32,11 +32,8 @@ async def delete_all_data():
     1. Truncates every table in the database
     2. Removes generated JSON output files
     3. Removes uploaded scan directories
-    4. Resets agent orchestrator state
-
-    NOTE: The persistent extraction cache is intentionally PRESERVED
-    so that re-uploading the same files completes in seconds.
-    Use DELETE /api/data/cache to clear the cache separately.
+    4. Clears extraction result cache (so next upload is always full extraction)
+    5. Resets agent orchestrator state
     """
     db = get_database()
 
@@ -64,7 +61,15 @@ async def delete_all_data():
                 except OSError as e:
                     logger.warning("Failed to remove scan dir %s: %s", entry_path, e)
 
-    # 4. Reset agent orchestrator state
+    # 4. Clear extraction result cache
+    cache_files_removed = 0
+    try:
+        from src.server.services.result_cache import ResultCache
+        cache_files_removed = ResultCache().clear()
+    except Exception as e:
+        logger.warning("Failed to clear extraction cache: %s", e)
+
+    # 5. Reset agent orchestrator state
     try:
         from src.server.services.agent_orchestrator import get_agent_orchestrator
         orchestrator = get_agent_orchestrator(db)
@@ -74,16 +79,17 @@ async def delete_all_data():
 
     total_rows = sum(counts.values())
     logger.info(
-        "Delete all: %d DB rows, %d JSON files, %d scan dirs removed (cache preserved)",
-        total_rows, json_files_removed, scan_dirs_removed,
+        "Delete all: %d DB rows, %d JSON files, %d scan dirs, %d cache files removed",
+        total_rows, json_files_removed, scan_dirs_removed, cache_files_removed,
     )
 
     return {
-        "message": "All data deleted successfully. Extraction cache preserved for fast re-upload.",
+        "message": "All data deleted successfully. Extraction cache cleared — next upload will run full extraction.",
         "deleted_rows": total_rows,
         "table_counts": counts,
         "json_files_removed": json_files_removed,
         "scan_dirs_removed": scan_dirs_removed,
+        "cache_files_removed": cache_files_removed,
     }
 
 
