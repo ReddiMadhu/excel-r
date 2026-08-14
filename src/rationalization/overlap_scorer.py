@@ -34,7 +34,7 @@ from src.parsers.formula_lineage import LINEAGE_SCHEMA_VERSION
 logger = logging.getLogger(__name__)
 
 # Bump when KPI/semantic/source-normalizer inputs to overlap change independently of file MD5
-OVERLAP_FEATURE_VERSION = "3.0-containment"
+OVERLAP_FEATURE_VERSION = "4.0-candidate-signal"
 
 
 def _lineage_hash_suffix() -> str:
@@ -90,6 +90,25 @@ def containment_score(set_a: Set[str], set_b: Set[str]) -> float:
     if not set_a:
         return 0.0
     return len(set_a & set_b) / len(set_a)
+
+
+def _extract_column_tokens(source_set: Set[str]) -> Set[str]:
+    """Extract column-only tokens from full source identifiers.
+
+    sql_data[statutory_reserves] → statutory_reserves
+    synthetic_data[amount]       → amount
+
+    Used ONLY for advisory candidate_column_overlap, never for ds_overlap.
+    Tokens shorter than 4 chars are excluded to avoid generic bridges
+    (e.g. 'id', 'amt', 'qty').
+    """
+    columns = set()
+    for src in source_set:
+        if '[' in src and ']' in src:
+            col = src.split('[', 1)[1].rstrip(']')
+            if col and len(col) > 3:
+                columns.add(col)
+    return columns
 
 
 def _get_canonical_kpis_for_workbook(
@@ -358,6 +377,7 @@ def compute_pairwise_overlaps(
             "structural_outputs": _get_structural_outputs_for_workbook(db, wb_id),
             "semantic_features": semantic_features,
             "semantic_data_available": semantic_available,
+            "column_tokens": _extract_column_tokens(raw_sources),
         }
 
     for wb_id, data in wb_data.items():
@@ -406,6 +426,11 @@ def compute_pairwise_overlaps(
                 ds_containment_a = min(ds_containment_a, 0.4)
                 ds_containment_b = min(ds_containment_b, 0.4)
             common_ds = list(src_a & src_b)
+
+            # Advisory candidate_column_overlap — NOT used in any scoring or gate
+            col_a = data_a.get("column_tokens", set())
+            col_b = data_b.get("column_tokens", set())
+            candidate_col_overlap = jaccard_similarity(col_a, col_b)
 
             struct_a = data_a["structural_outputs"]
             struct_b = data_b["structural_outputs"]
@@ -507,6 +532,8 @@ def compute_pairwise_overlaps(
                 "name_a": data_a["name"],
                 "name_b": data_b["name"],
                 "cluster_edge_score": 0.0,  # computed below
+                # Advisory only — NOT included in cluster_edge_score or any gate
+                "candidate_column_overlap": round(candidate_col_overlap, 4),
             }
             entry["cluster_edge_score"] = round(_get_cluster_edge_score(entry), 4)
             results[(id_a, id_b)] = entry

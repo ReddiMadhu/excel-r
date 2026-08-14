@@ -347,6 +347,36 @@ CREATE TABLE IF NOT EXISTS excel_review_findings (
 );
 CREATE INDEX IF NOT EXISTS idx_excel_review_workbook ON excel_review_findings(workbook_id);
 CREATE INDEX IF NOT EXISTS idx_excel_review_type ON excel_review_findings(finding_type);
+
+-- Table 17: rationalization_audit (Evidence-based governance audit trail)
+CREATE TABLE IF NOT EXISTS rationalization_audit (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    rationalization_run_id      TEXT,
+    cluster_id                  INTEGER,
+    cluster_name                TEXT,
+    workbook_id                 INTEGER NOT NULL,
+    workbook_name               TEXT,
+    canonical_target_id         INTEGER,
+    canonical_target_name       TEXT,
+    cluster_role                TEXT NOT NULL,
+    action                      TEXT NOT NULL,
+    decommission_after_merge    BOOLEAN DEFAULT 0,
+    kpi_containment             REAL,
+    ds_containment              REAL,
+    ds_overlap                  REAL,
+    candidate_column_overlap    REAL,
+    extraction_quality          REAL,
+    comparison_mode             TEXT,
+    safety_gates_summary        JSON,
+    evidence                    JSON,
+    reasons                     JSON,
+    created_at                  TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY(workbook_id) REFERENCES workbooks(id)
+);
+CREATE INDEX IF NOT EXISTS idx_rat_audit_run_id ON rationalization_audit(rationalization_run_id);
+CREATE INDEX IF NOT EXISTS idx_rat_audit_workbook ON rationalization_audit(workbook_id);
+CREATE INDEX IF NOT EXISTS idx_rat_audit_cluster ON rationalization_audit(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_rat_audit_action ON rationalization_audit(action);
 """
 
 

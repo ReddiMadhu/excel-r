@@ -307,6 +307,9 @@ def assign_roles_for_cluster(
             "decommission_after_merge": False,
             "reasons": reasons,
             "unique_kpis_in_cluster": sorted(unique_kpis),
+            "_kpi_containment": kpi_containment_in_cluster,
+            "_ds_containment": ds_containment_with_canonical,
+            "_ds_overlap": ds_overlap_with_canonical,
         }
 
     # ── Pass 2: Canonical role refinement (GAP-03 fix) ───────
@@ -376,6 +379,9 @@ def assign_roles_for_cluster(
                     "decommission_after_merge": False,
                     "reasons": reasons,
                     "unique_kpis_in_cluster": [],
+                    "_kpi_containment": kpi_containment_in_cluster,
+                    "_ds_containment": ds_containment_with_canonical,
+                    "_ds_overlap": ds_overlap_with_canonical,
                 }
 
     # ── canonical_target entry ─────────────────────────────────
@@ -386,6 +392,9 @@ def assign_roles_for_cluster(
         "decommission_after_merge": False,
         "reasons": ["Retained as canonical workbook for this cluster."],
         "unique_kpis_in_cluster": sorted(unique_to_member(canonical_id)),
+        "_kpi_containment": 1.0,
+        "_ds_containment": 1.0,
+        "_ds_overlap": 1.0,
     }
 
     # ── decommission_after_merge pass (GAP-04 fix) ────────────
@@ -469,4 +478,67 @@ def run_cluster_recommendations(
         sum(1 for d in all_decisions if d["action"] == "decommission"),
         sum(1 for d in all_decisions if d["action"] == "review"),
     )
+
+    # ── Phase 6: Evidence-Based Audit Trail ──────────────────
+    try:
+        from src.rationalization.audit_logger import record_rationalization_audit
+        audit_entries = []
+        for cluster in clusters:
+            cid = cluster.get("id")
+            cname = cluster.get("cluster_name", "N/A")
+            canonical_id = cluster.get("canonical_target_id")
+            canonical_name = wb_map.get(canonical_id, {}).get("name", str(canonical_id)) if canonical_id else "None"
+            member_ids = cluster.get("member_ids", [])
+
+            for d in all_decisions:
+                wid = d["workbook_id"]
+                if wid not in member_ids:
+                    continue
+                wb_info = wb_map.get(wid, {})
+                pw_key = (min(wid, canonical_id), max(wid, canonical_id)) if canonical_id and wid != canonical_id else None
+                pw = pairwise.get(pw_key, {}) if pw_key else {}
+
+                k_cont = d.get("_kpi_containment", 1.0 if wid == canonical_id else 0.0)
+                d_cont = d.get("_ds_containment", 1.0 if wid == canonical_id else 0.0)
+                d_ov = d.get("_ds_overlap", 1.0 if wid == canonical_id else 0.0)
+                cand_ov = pw.get("candidate_column_overlap", 0.0)
+                q_score = wb_info.get("extraction_quality_score")
+                c_mode = wb_info.get("comparison_mode", "insufficient")
+
+                audit_entries.append({
+                    "workbook_id": wid,
+                    "workbook_name": wb_info.get("name", str(wid)),
+                    "cluster_id": cid,
+                    "cluster_name": cname,
+                    "canonical_target_id": canonical_id,
+                    "canonical_target_name": canonical_name,
+                    "cluster_role": d.get("cluster_role"),
+                    "action": d.get("action"),
+                    "decommission_after_merge": d.get("decommission_after_merge", False),
+                    "kpi_containment": k_cont,
+                    "ds_containment": d_cont,
+                    "ds_overlap": d_ov,
+                    "candidate_column_overlap": cand_ov,
+                    "extraction_quality": q_score,
+                    "comparison_mode": c_mode,
+                    "safety_gates_summary": {
+                        "KPI containment in cluster (>=100%)": k_cont >= 1.0 if wid != canonical_id else True,
+                        "DS containment with canonical (>=85%)": d_cont >= 0.85 if wid != canonical_id else True,
+                        "Extraction quality (>=60%)": (q_score is not None and q_score >= 0.60),
+                        "Comparison mode (not insufficient)": (c_mode != "insufficient"),
+                    },
+                    "evidence": {
+                        "unique_kpis": d.get("unique_kpis_in_cluster", []),
+                        "common_kpis": pw.get("common_kpis", []),
+                        "fingerprint_matches": pw.get("fingerprint_matches", 0),
+                        "fingerprint_total": pw.get("fingerprint_total", 0),
+                    },
+                    "reasons": d.get("reasons", []),
+                })
+
+        if audit_entries:
+            record_rationalization_audit(db, audit_entries)
+    except Exception as e:
+        logger.warning("Could not record rationalization audit: %s", e)
+
     return all_decisions

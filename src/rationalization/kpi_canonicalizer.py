@@ -24,6 +24,88 @@ from src.rationalization.source_normalizer import normalize_source_token
 logger = logging.getLogger(__name__)
 
 
+import os
+import yaml
+
+_DEFAULT_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "data", "config", "kpi_normalization.yaml"
+)
+
+_CACHED_CONFIG = None
+
+
+def load_kpi_normalization_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """Load deterministic KPI normalization configuration from YAML."""
+    global _CACHED_CONFIG
+    path = config_path or _DEFAULT_CONFIG_PATH
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+                if isinstance(data, dict) and "kpi_normalization" in data:
+                    _CACHED_CONFIG = data["kpi_normalization"]
+                    return _CACHED_CONFIG
+        except Exception as e:
+            logger.warning("Could not load KPI normalization config from %s: %s", path, e)
+
+    # Fallback defaults if config file is not found
+    _CACHED_CONFIG = {
+        "aggregation_prefixes": ["sum of ", "count of ", "avg of ", "average of ", "total of ", "max of ", "min of "],
+        "explicit_prefixes": ["LFG ", "LNBAR 2024 EB "],
+        "protected_prefixes": ["Net ", "Gross ", "Total ", "Non-", "3rd Party "],
+    }
+    return _CACHED_CONFIG
+
+
+def normalize_kpi_name(name: str, config: Optional[Dict[str, Any]] = None) -> str:
+    """Level 1: deterministic normalization only (no fuzzy matching).
+
+    1. Strips aggregation wrappers (e.g., 'Sum of GA Stat Reserve' -> 'GA Stat Reserve')
+    2. Strips portfolio-specific explicit prefixes unless protected
+    3. Normalizes whitespace and casing
+    """
+    if not name:
+        return ""
+
+    cfg = config or _CACHED_CONFIG or load_kpi_normalization_config()
+    agg_prefixes = cfg.get("aggregation_prefixes", [])
+    exp_prefixes = cfg.get("explicit_prefixes", [])
+    protected_prefixes = cfg.get("protected_prefixes", [])
+
+    cleaned = name.strip()
+
+    # Strip aggregation prefixes (case-insensitive)
+    changed = True
+    while changed:
+        changed = False
+        for p in agg_prefixes:
+            if cleaned.lower().startswith(p.lower()):
+                cleaned = cleaned[len(p):].strip()
+                changed = True
+                break
+
+    # Strip explicit prefixes unless it starts with a protected prefix
+    is_protected = any(cleaned.lower().startswith(p.lower()) for p in protected_prefixes)
+    if not is_protected:
+        for p in exp_prefixes:
+            if cleaned.lower().startswith(p.lower()):
+                cleaned = cleaned[len(p):].strip()
+                break
+    else:
+        # If it starts with an explicit prefix followed by a protected prefix, strip only the explicit prefix
+        for p in exp_prefixes:
+            if cleaned.lower().startswith(p.lower()):
+                remainder = cleaned[len(p):].strip()
+                if remainder:
+                    cleaned = remainder
+                break
+
+    # Normalize internal spaces
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
 # ---------------------------------------------------------------------------
 # Content-based matching helpers
 # ---------------------------------------------------------------------------
@@ -45,7 +127,7 @@ def _sources_key(sources: List[str]) -> FrozenSet[str]:
     )
 
 
-def _enrich_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _enrich_row(row: Dict[str, Any], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Add pre-computed comparison keys to a raw DB row so matching is fast.
     Modifies the dict in-place and returns it.
@@ -68,6 +150,7 @@ def _enrich_row(row: Dict[str, Any]) -> Dict[str, Any]:
     row["_fp"] = (row.get("fingerprint") or "").strip()
     row["_fp_pattern"] = (row.get("formula_pattern") or "").strip()
     row["_comp_type"] = (row.get("computation_type") or "").strip()
+    row["_name_norm"] = normalize_kpi_name(row.get("name") or "", config)
     return row
 
 
@@ -192,6 +275,23 @@ def _content_match(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[str]:
         and a["_sources_key"] == b["_sources_key"]
     ):
         return "definition"
+
+    # 5. Deterministic normalized name match (Level 1: aggregation/prefix stripping)
+    #    Guarded by:
+    #      (a) names must not contradict (checked above)
+    #      (b) normalized name must be non-empty and at least 3 chars
+    #      (c) requires matching sources OR matching computation type OR matching fingerprints
+    if (
+        a.get("_name_norm")
+        and len(a["_name_norm"]) >= 3
+        and a["_name_norm"].lower() == b.get("_name_norm", "").lower()
+    ):
+        if (
+            (a["_sources_key"] and a["_sources_key"] == b["_sources_key"])
+            or (a["_comp_type"] and a["_comp_type"] == b["_comp_type"])
+            or (a["_fp"] and a["_fp"] == b["_fp"])
+        ):
+            return "normalized_name"
 
     return None
 
@@ -462,7 +562,7 @@ def run_kpi_canonicalization(
             # Determine a representative method label from the strongest signal
             signals = cluster.get("match_signals", {})
             method = "content"
-            for sig in ("fingerprint", "source_type", "pattern", "definition"):
+            for sig in ("fingerprint", "source_type", "normalized_name", "pattern", "definition"):
                 if sig in signals:
                     method = sig
                     break
