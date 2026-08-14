@@ -298,9 +298,15 @@ class Recommender:
                     wb_id, partner_id, decisions, pairwise
                 ):
                     continue
+                pw_key = (min(wb_id, partner_id), max(wb_id, partner_id))
+                pw = pairwise.get(pw_key, {})
+                kpi_ov = pw.get("kpi_overlap", 0.0)
+                ds_ov = pw.get("ds_overlap", 0.0)
+                partner_name = wb_map.get(partner_id, {}).get("name", str(partner_id))
                 decisions[wb_id]["action"] = "review"
                 decisions[wb_id]["reasons"].append(
-                    "Ambiguous overlap — LLM assessment inconclusive; manual review required."
+                    f"Ambiguous overlap with '{partner_name}' (KPI overlap: {kpi_ov:.1%}, DS overlap: {ds_ov:.1%}) — "
+                    "LLM assessment inconclusive; Governance Review required."
                 )
 
         # ── Step 5: Write to DB ──────────────────────────────

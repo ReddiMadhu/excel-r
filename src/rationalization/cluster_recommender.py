@@ -293,7 +293,11 @@ def assign_roles_for_cluster(
         else:
             role = "review"
             reasons.append(
-                "Ambiguous overlap within cluster — Governance Review required."
+                f"Ambiguous overlap within cluster — Governance Review required. "
+                f"Diagnostics: KPI containment in cluster = {kpi_containment_in_cluster:.1%} (decommission target: 100%), "
+                f"DS containment with canonical = {ds_containment_with_canonical:.1%} (decommission target: {decomm_ds_thresh:.0%}), "
+                f"DS overlap with canonical = {ds_overlap_with_canonical:.1%} (merge target: {merge_ds_thresh:.0%}), "
+                f"Unique KPIs = {len(unique_kpis)}."
             )
 
         decisions[wb_id] = {
@@ -358,7 +362,12 @@ def assign_roles_for_cluster(
                     role = "decommission"
                     reasons = [f"All KPIs covered by cluster canonical target (datasource containment {ds_containment_with_canonical:.0%})."]
                 else:
-                    role, reasons = "review", ["Ambiguous — Governance Review required."]
+                    role, reasons = "review", [
+                        f"Ambiguous overlap within cluster — Governance Review required. "
+                        f"Diagnostics: KPI containment in cluster = {kpi_containment_in_cluster:.1%} (decommission target: 100%), "
+                        f"DS containment with canonical = {ds_containment_with_canonical:.1%} (decommission target: {decomm_ds_thresh:.0%}), "
+                        f"DS overlap with canonical = {ds_overlap_with_canonical:.1%} (merge target: {merge_ds_thresh:.0%})."
+                    ]
 
                 decisions[wb_id] = {
                     "workbook_id": wb_id,
