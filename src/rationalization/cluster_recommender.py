@@ -172,6 +172,41 @@ def assign_roles_for_cluster(
     decisions: Dict[int, Dict[str, Any]] = {}
     canonical_id = tentative_canonical
 
+    def _find_best_ds_reference(wb_id: int, exclude_id: int) -> Tuple[int, float, float]:
+        """
+        Find the cluster member with the best datasource containment for wb_id.
+        Returns (best_ref_id, best_ds_containment, best_ds_overlap).
+        
+        This solves the multi-datasource-group problem: if a cluster contains
+        sub-groups with different data sources (e.g. A,B,C use DS_Y; 3,4 use DS_X),
+        workbook 3 should be evaluated against workbook 4 (its DS peer), not
+        against workbook A which shares zero DS overlap.
+        """
+        my_sources = ds_sets[wb_id]
+        if not my_sources:
+            return exclude_id, 0.0, 0.0
+
+        best_ref = exclude_id
+        best_cont = 0.0
+        best_ov = 0.0
+
+        for other_id in member_ids:
+            if other_id == wb_id:
+                continue
+            other_sources = ds_sets[other_id]
+            if not other_sources:
+                continue
+            intersection = my_sources & other_sources
+            cont = len(intersection) / len(my_sources)
+            union_s = my_sources | other_sources
+            ov = len(intersection) / len(union_s) if union_s else 0.0
+            if cont > best_cont or (cont == best_cont and ov > best_ov):
+                best_cont = cont
+                best_ov = ov
+                best_ref = other_id
+        
+        return best_ref, best_cont, best_ov
+
     for wb_id in member_ids:
         if wb_id == canonical_id:
             continue
@@ -191,6 +226,7 @@ def assign_roles_for_cluster(
         )
         unique_kpis = unique_to_member(wb_id)
 
+        # Primary: compare against global canonical
         ds_overlap_with_canonical = _ds_overlap(pairwise, wb_id, canonical_id)
         
         my_sources = ds_sets[wb_id]
@@ -199,6 +235,27 @@ def assign_roles_for_cluster(
             len(my_sources & canonical_sources) / len(my_sources)
             if my_sources else 0.0
         )
+
+        # ── Best-reference fallback ──────────────────────────────
+        # If DS containment with global canonical is below decommission threshold,
+        # search for a better DS-matching peer within the cluster.
+        # This handles multi-datasource-group clusters where sub-groups share
+        # different underlying data sources but the same KPIs.
+        effective_ref_id = canonical_id
+        effective_ds_cont = ds_containment_with_canonical
+        effective_ds_ov = ds_overlap_with_canonical
+
+        if ds_containment_with_canonical < decomm_ds_thresh:
+            best_ref, best_cont, best_ov = _find_best_ds_reference(wb_id, canonical_id)
+            if best_cont > ds_containment_with_canonical:
+                effective_ref_id = best_ref
+                effective_ds_cont = best_cont
+                effective_ds_ov = best_ov
+                logger.info(
+                    "Best-reference: workbook %d has 0%% DS with canonical %d, "
+                    "switching to best DS peer %d (containment=%.1f%%, overlap=%.1f%%)",
+                    wb_id, canonical_id, best_ref, best_cont * 100, best_ov * 100,
+                )
 
         # Priority order
         role: str
@@ -279,27 +336,30 @@ def assign_roles_for_cluster(
                 wb_id, _raw_count, _cache_count,
             )
 
-        elif kpi_containment_in_cluster >= 1.0 and ds_containment_with_canonical >= decomm_ds_thresh:
+        elif kpi_containment_in_cluster >= 1.0 and effective_ds_cont >= decomm_ds_thresh:
             role = "decommission"
+            ref_label = f"canonical target" if effective_ref_id == canonical_id else f"best DS peer (workbook {effective_ref_id})"
             reasons.append(
                 f"All {len(my_kpis)} KPIs in this workbook are covered by the cluster "
-                f"(datasource containment {ds_containment_with_canonical:.0%} with canonical target)."
+                f"(datasource containment {effective_ds_cont:.0%} with {ref_label})."
             )
 
-        elif len(unique_kpis) > 0 and ds_overlap_with_canonical >= merge_ds_thresh:
+        elif len(unique_kpis) > 0 and effective_ds_ov >= merge_ds_thresh:
             role = "merge_source"
+            ref_label = f"canonical target" if effective_ref_id == canonical_id else f"best DS peer (workbook {effective_ref_id})"
             reasons.append(
                 f"Contributes {len(unique_kpis)} unique KPI(s) not found in any other cluster member "
-                f"(datasource overlap {ds_overlap_with_canonical:.0%})."
+                f"(datasource overlap {effective_ds_ov:.0%} with {ref_label})."
             )
 
         else:
             role = "review"
+            ref_label = f"canonical (WB {canonical_id})" if effective_ref_id == canonical_id else f"best DS peer (WB {effective_ref_id})"
             reasons.append(
                 f"Ambiguous overlap within cluster — Governance Review required. "
                 f"Diagnostics: KPI containment in cluster = {kpi_containment_in_cluster:.1%} (decommission target: 100%), "
-                f"DS containment with canonical = {ds_containment_with_canonical:.1%} (decommission target: {decomm_ds_thresh:.0%}), "
-                f"DS overlap with canonical = {ds_overlap_with_canonical:.1%} (merge target: {merge_ds_thresh:.0%}), "
+                f"DS containment with {ref_label} = {effective_ds_cont:.1%} (decommission target: {decomm_ds_thresh:.0%}), "
+                f"DS overlap with {ref_label} = {effective_ds_ov:.1%} (merge target: {merge_ds_thresh:.0%}), "
                 f"Unique KPIs = {len(unique_kpis)}."
             )
 
@@ -311,8 +371,8 @@ def assign_roles_for_cluster(
             "reasons": reasons,
             "unique_kpis_in_cluster": sorted(unique_kpis),
             "_kpi_containment": kpi_containment_in_cluster,
-            "_ds_containment": ds_containment_with_canonical,
-            "_ds_overlap": ds_overlap_with_canonical,
+            "_ds_containment": effective_ds_cont,
+            "_ds_overlap": effective_ds_ov,
         }
 
     # ── Pass 2: Canonical role refinement (GAP-03 fix) ───────
@@ -351,6 +411,17 @@ def assign_roles_for_cluster(
                     len(my_sources & canonical_sources) / len(my_sources)
                     if my_sources else 0.0
                 )
+
+                # Best-reference fallback (same logic as Pass 1)
+                eff_ref = canonical_id
+                eff_cont = ds_containment_with_canonical
+                eff_ov = ds_overlap_with_canonical
+                if ds_containment_with_canonical < decomm_ds_thresh:
+                    best_ref, best_cont, best_ov = _find_best_ds_reference(wb_id, canonical_id)
+                    if best_cont > ds_containment_with_canonical:
+                        eff_ref = best_ref
+                        eff_cont = best_cont
+                        eff_ov = best_ov
                 
                 quality = wb_map.get(wb_id, {}).get("extraction_quality_score")
                 if quality is None:
@@ -364,15 +435,17 @@ def assign_roles_for_cluster(
                     ]
                 elif not my_kpis:
                     role, reasons = "review", ["No KPIs extracted — cannot assess redundancy."]
-                elif kpi_containment_in_cluster >= 1.0 and ds_containment_with_canonical >= decomm_ds_thresh:
+                elif kpi_containment_in_cluster >= 1.0 and eff_cont >= decomm_ds_thresh:
+                    ref_label = "canonical target" if eff_ref == canonical_id else f"best DS peer (workbook {eff_ref})"
                     role = "decommission"
-                    reasons = [f"All KPIs covered by cluster canonical target (datasource containment {ds_containment_with_canonical:.0%})."]
+                    reasons = [f"All KPIs covered by cluster {ref_label} (datasource containment {eff_cont:.0%})."]
                 else:
+                    ref_label = f"canonical (WB {canonical_id})" if eff_ref == canonical_id else f"best DS peer (WB {eff_ref})"
                     role, reasons = "review", [
                         f"Ambiguous overlap within cluster — Governance Review required. "
                         f"Diagnostics: KPI containment in cluster = {kpi_containment_in_cluster:.1%} (decommission target: 100%), "
-                        f"DS containment with canonical = {ds_containment_with_canonical:.1%} (decommission target: {decomm_ds_thresh:.0%}), "
-                        f"DS overlap with canonical = {ds_overlap_with_canonical:.1%} (merge target: {merge_ds_thresh:.0%})."
+                        f"DS containment with {ref_label} = {eff_cont:.1%} (decommission target: {decomm_ds_thresh:.0%}), "
+                        f"DS overlap with {ref_label} = {eff_ov:.1%} (merge target: {merge_ds_thresh:.0%})."
                     ]
 
                 decisions[wb_id] = {
@@ -383,8 +456,8 @@ def assign_roles_for_cluster(
                     "reasons": reasons,
                     "unique_kpis_in_cluster": [],
                     "_kpi_containment": kpi_containment_in_cluster,
-                    "_ds_containment": ds_containment_with_canonical,
-                    "_ds_overlap": ds_overlap_with_canonical,
+                    "_ds_containment": eff_cont,
+                    "_ds_overlap": eff_ov,
                 }
 
     # ── canonical_target entry ─────────────────────────────────
