@@ -147,9 +147,12 @@ def assign_roles_for_cluster(
 
     # ── Fetch raw sources for all members to compute containment ──
     from src.rationalization.overlap_scorer import _get_raw_sources_for_workbook
+    from src.rationalization.source_normalizer import build_datasource_canonical_mapping
+    ds_mapping = build_datasource_canonical_mapping(db, member_ids)
     ds_sets: Dict[int, Set[str]] = {}
     for wb_id in member_ids:
-        sources, _mode = _get_raw_sources_for_workbook(db, wb_id)
+        sheet_map = ds_mapping.get(wb_id, {})
+        sources, _mode = _get_raw_sources_for_workbook(db, wb_id, sheet_mapping=sheet_map)
         ds_sets[wb_id] = sources
 
     # ── Cluster-union KPI computation (GAP-02 fix) ────────────

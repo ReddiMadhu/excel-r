@@ -126,17 +126,16 @@ def _get_canonical_kpis_for_workbook(
 
 
 def _get_raw_sources_for_workbook(
-    db: Database, workbook_id: int
+    db: Database,
+    workbook_id: int,
+    sheet_mapping: Optional[Dict[str, str]] = None,
 ) -> Tuple[Set[str], str]:
     """
-    Get normalized raw source set for a workbook.
+    Collect and normalize ultimate_raw_sources for a workbook.
 
-    Returns (sources, ds_overlap_mode) where mode is:
-      lineage | primary_inputs | header_fallback
-
-    Source priority:
-      1. ultimate_raw_sources from calculated_fields
-      2. primary_inputs from workbooks
+    Priority:
+      1. Formula lineage ultimate_raw_sources (gold standard)
+      2. primary_inputs from workbook metadata (heuristic fallback)
       3. Datasource column headers (fallback ONLY) — caps reliability
     """
     sources: Set[str] = set()
@@ -149,13 +148,19 @@ def _get_raw_sources_for_workbook(
           AND ultimate_raw_sources != '[]'
     """, (workbook_id,))
     for r in rows:
-        sources |= normalize_source_set(parse_json_list(r.get("ultimate_raw_sources")))
+        sources |= normalize_source_set(
+            parse_json_list(r.get("ultimate_raw_sources")),
+            sheet_mapping=sheet_mapping,
+        )
     if sources:
         return sources, "lineage"
 
     wb = db.query_one("SELECT primary_inputs FROM workbooks WHERE id = ?", (workbook_id,))
     if wb:
-        sources |= normalize_source_set(parse_json_list(wb.get("primary_inputs")))
+        sources |= normalize_source_set(
+            parse_json_list(wb.get("primary_inputs")),
+            sheet_mapping=sheet_mapping,
+        )
     if sources:
         return sources, "primary_inputs"
 
@@ -363,10 +368,14 @@ def compute_pairwise_overlaps(
     for wb in workbooks:
         wb_hashes[wb["id"]] = _workbook_overlap_hash(db, wb["id"], kpi_ver)
 
+    from src.rationalization.source_normalizer import build_datasource_canonical_mapping
+    ds_mapping = build_datasource_canonical_mapping(db, [wb["id"] for wb in workbooks])
+
     wb_data: Dict[int, Dict[str, Any]] = {}
     for wb in workbooks:
         wb_id = wb["id"]
-        raw_sources, ds_mode = _get_raw_sources_for_workbook(db, wb_id)
+        sheet_map = ds_mapping.get(wb_id, {})
+        raw_sources, ds_mode = _get_raw_sources_for_workbook(db, wb_id, sheet_mapping=sheet_map)
         semantic_features = get_workbook_semantic_features(db, wb_id, wb["name"])
         wb_data[wb_id] = {
             "name": wb["name"],
