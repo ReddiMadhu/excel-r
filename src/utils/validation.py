@@ -6,6 +6,7 @@ Added generic structural checks and formula resolution quality checks.
 """
 import os
 import re
+from typing import Any, Dict, List, Optional, Tuple
 
 # KPI-comparable types (checks excluded — they are VALIDATION, not KPIs)
 _COMPARABLE_TYPES = frozenset({"formula_based", "pivot_value", "total"})
