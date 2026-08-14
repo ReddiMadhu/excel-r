@@ -6,7 +6,7 @@ into comparable tokens for overlap scoring.
 """
 import json
 import re
-from typing import Any, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 # Configurable abbreviation map (extend via env or config file in v2)
 _ABBREVIATIONS = {
