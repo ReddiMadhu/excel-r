@@ -37,9 +37,11 @@ def _env_float(key: str, default: float) -> float:
 
 def _qualifies_for_edge(overlap: Dict[str, Any]) -> bool:
     """
-    An edge forms between A and B if ANY of the four conditions hold:
-      1. cluster_edge_score >= CLUSTER_SEED_THRESHOLD
-      2. kpi_overlap       >= CLUSTER_KPI_THRESHOLD
+    An edge forms between A and B if ANY of the qualifying conditions hold:
+      1. cluster_edge_score >= CLUSTER_SEED_THRESHOLD (composite multi-signal)
+      2. (kpi_overlap >= CLUSTER_KPI_THRESHOLD AND (ds_overlap > 0 or fingerprint_ratio > 0))
+         -- Generic KPI name overlap alone with zero shared sources and zero formula matches
+            cannot bridge unrelated reports into a single cluster.
       3. ds_overlap        >= CLUSTER_DS_THRESHOLD
       4. fingerprint_ratio >= CLUSTER_FP_THRESHOLD
     Semantic similarity alone cannot qualify an edge.
@@ -49,11 +51,20 @@ def _qualifies_for_edge(overlap: Dict[str, Any]) -> bool:
     ds_thresh = _env_float("CLUSTER_DS_THRESHOLD", 0.60)
     fp_thresh = _env_float("CLUSTER_FP_THRESHOLD", 0.50)
 
+    edge_score = overlap.get("cluster_edge_score", 0.0)
+    kpi_ov = overlap.get("kpi_overlap", 0.0)
+    ds_ov = overlap.get("ds_overlap", 0.0)
+    fp_ratio = overlap.get("fingerprint_ratio", 0.0)
+
+    # Pure KPI name overlap with zero shared sources and zero shared formula structures
+    # is a generic industry naming coincidence, not a rationalization cluster edge.
+    kpi_qualifies = (kpi_ov >= kpi_thresh) and (ds_ov > 0.0 or fp_ratio > 0.0)
+
     return (
-        overlap.get("cluster_edge_score", 0.0) >= seed_thresh
-        or overlap.get("kpi_overlap", 0.0) >= kpi_thresh
-        or overlap.get("ds_overlap", 0.0) >= ds_thresh
-        or overlap.get("fingerprint_ratio", 0.0) >= fp_thresh
+        edge_score >= seed_thresh
+        or kpi_qualifies
+        or ds_ov >= ds_thresh
+        or fp_ratio >= fp_thresh
     )
 
 
