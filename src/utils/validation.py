@@ -35,10 +35,13 @@ def _fingerprint_is_usable(fingerprint: str, computation_type: str) -> bool:
     if not fingerprint:
         return False
     fp = fingerprint.lower()
-    if computation_type in ("SUMIFS", "MULTI_AGG", "SUM_RANGE"):
+    if computation_type in ("SUMIFS", "MULTI_AGG"):
         if "sum:" not in fp:
             return False
         if "sum:col_" in fp:
+            return False
+    elif computation_type == "SUM_RANGE":
+        if ":col_" in fp:
             return False
     return True
 
@@ -55,7 +58,7 @@ def compute_comparison_readiness(json_data):
       column_diagnostics: list of per-column diagnostic dicts for non-ready columns
 
     Rules:
-      FULL        = >=80% ready AND no critical failures (externals, mixed lineage,
+      FULL        = >=80% ready AND no critical failures (externals,
                     Col_* sources dominating, parser degraded)
       DEGRADED    = score >= 0.4 or some recoverable issues
       INSUFFICIENT = majority of KPI columns lack usable lineage
@@ -140,7 +143,6 @@ def compute_comparison_readiness(json_data):
                     and has_sources
                     and roles_ok
                     and comp_type in _FULL_TYPES
-                    and not is_mixed
                     and resolved_by not in ("degraded", "none")
                 ):
                     ready += 1
@@ -169,8 +171,6 @@ def compute_comparison_readiness(json_data):
                         failures.append(f"computation_type: '{comp_type}' not in supported set")
                     if not comp_type:
                         failures.append("computation_type: empty/missing")
-                    if is_mixed:
-                        failures.append("lineage_is_mixed: true")
                     if is_external:
                         failures.append("references_external: true")
                     if resolved_by in ("degraded", "none"):
@@ -187,8 +187,6 @@ def compute_comparison_readiness(json_data):
 
     if has_external:
         critical_flags.append("external_refs")
-    if has_mixed:
-        critical_flags.append("mixed_lineage")
     if has_parser_degraded:
         critical_flags.append("parser_degraded")
     if unresolved_header_count > 0:
@@ -201,7 +199,7 @@ def compute_comparison_readiness(json_data):
         score = round((ready + degraded * 0.5) / comparable, 4)
         full_ratio = ready / comparable
         # Never allow full when critical lineage issues exist
-        if critical_flags or has_external or has_mixed:
+        if critical_flags or has_external:
             if score >= 0.4:
                 mode = "degraded"
             else:
@@ -219,13 +217,13 @@ def compute_comparison_readiness(json_data):
         score = 0.0
 
     # Log diagnostic summary
-    if mode != "full" and column_diagnostics:
-        _logger.info(
-            "Extraction quality for '%s': score=%.2f mode=%s "
-            "(comparable=%d ready=%d degraded=%d missing=%d flags=%s)",
-            file_name, score, mode, comparable, ready, degraded, missing,
-            critical_flags,
-        )
+    _logger.info(
+        "Extraction quality for '%s': score=%.2f mode=%s "
+        "(comparable=%d ready=%d degraded=%d missing=%d flags=%s)",
+        file_name, score, mode, comparable, ready, degraded, missing,
+        critical_flags,
+    )
+    if column_diagnostics:
         for diag in column_diagnostics[:10]:  # Log first 10 to avoid spam
             _logger.info(
                 "  Column '%s' [%s/%s] status=%s: %s",
@@ -235,7 +233,7 @@ def compute_comparison_readiness(json_data):
         if len(column_diagnostics) > 10:
             _logger.info("  ... and %d more non-ready columns", len(column_diagnostics) - 10)
 
-    return {
+    result = {
         "extraction_quality_score": score,
         "comparison_mode": mode,
         "comparable_columns": comparable,
@@ -246,6 +244,87 @@ def compute_comparison_readiness(json_data):
         "unresolved_header_count": unresolved_header_count,
         "column_diagnostics": column_diagnostics,
     }
+
+    # Automatically write to extraction quality log file
+    try:
+        write_extraction_quality_log(json_data, result)
+    except Exception as e:
+        _logger.warning("Could not write extraction quality log: %s", e)
+
+    return result
+
+
+def write_extraction_quality_log(json_data: dict, readiness: Optional[dict] = None, output_dir: Optional[str] = None) -> str:
+    """
+    Append / record detailed extraction quality log with full root cause reasons.
+    Writes to data/output/extraction_quality.log.
+    """
+    from datetime import datetime
+
+    if readiness is None:
+        readiness = compute_comparison_readiness(json_data)
+
+    file_name = json_data.get("file_name", "unknown")
+    if not output_dir:
+        output_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "data", "output")
+        )
+    os.makedirs(output_dir, exist_ok=True)
+    log_path = os.path.join(output_dir, "extraction_quality.log")
+
+    score = readiness.get("extraction_quality_score", 0.0)
+    mode = readiness.get("comparison_mode", "insufficient")
+    comparable = readiness.get("comparable_columns", 0)
+    ready = readiness.get("ready_columns", 0)
+    degraded = readiness.get("degraded_columns", 0)
+    missing = readiness.get("missing_columns", 0)
+    critical_flags = readiness.get("critical_flags", [])
+    unresolved_count = readiness.get("unresolved_header_count", 0)
+    diagnostics = readiness.get("column_diagnostics", [])
+
+    status_str = "PASS (Ready for Comparison)" if score >= 0.60 and mode == "full" else (
+        f"REVIEW REQUIRED (Score {score:.1%} below 60% or mode={mode})"
+    )
+
+    now_str = datetime.now().isoformat()
+    lines = [
+        f"================================================================================",
+        f"EXTRACTION QUALITY LOG — {now_str}",
+        f"Workbook / File: {file_name}",
+        f"Quality Score  : {score:.2%} ({score})",
+        f"Comparison Mode: {mode}",
+        f"Status         : {status_str}",
+        f"--------------------------------------------------------------------------------",
+        f"SUMMARY METRICS:",
+        f"  • Total Comparable KPI Columns: {comparable}",
+        f"  • Ready Columns               : {ready} ({ready/comparable*100:.1f}%)" if comparable > 0 else "  • Ready Columns: 0",
+        f"  • Degraded Columns            : {degraded}",
+        f"  • Missing / Unusable Columns  : {missing}",
+        f"  • Unresolved Header Sources   : {unresolved_count}",
+        f"  • Critical Readiness Flags    : {', '.join(critical_flags) if critical_flags else 'None'}",
+    ]
+
+    if diagnostics:
+        lines.append(f"\nROOT CAUSE & COLUMN DIAGNOSTICS ({len(diagnostics)} non-ready columns):")
+        for d in diagnostics:
+            col = d.get("column", "unknown")
+            tbl = d.get("table", "unknown")
+            sht = d.get("sheet", "unknown")
+            c_status = d.get("status", "unknown")
+            fails = d.get("failures", [])
+            lines.append(f"  ✕ [{tbl} / {sht}] Column '{col}' → Status: {c_status.upper()}")
+            for fail in fails:
+                lines.append(f"      Reason: {fail}")
+    else:
+        lines.append(f"\nCOLUMN STATUS:")
+        lines.append(f"  ✓ All {comparable} comparable columns fully resolved with valid fingerprints and lineage sources.")
+
+    lines.append(f"================================================================================\n\n")
+
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    return log_path
 
 
 def validate_extracted_json(json_data):

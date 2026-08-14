@@ -306,3 +306,18 @@ async def get_diagnostic_log():
         content = f.read()
     return PlainTextResponse(content)
 
+
+@router.get("/extraction-quality-log")
+async def get_extraction_quality_log():
+    """Retrieve the latest extraction quality log content."""
+    import os
+    from fastapi.responses import PlainTextResponse
+    log_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "output", "extraction_quality.log")
+    )
+    if not os.path.exists(log_path):
+        return PlainTextResponse("No extraction quality log generated yet. Run extraction/upload first.", status_code=404)
+    with open(log_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return PlainTextResponse(content)
+

@@ -52,7 +52,7 @@ def load_workbook_json(
         metadata = output_json.get("workbook_metadata", {})
         process_flow = output_json.get("process_flow", {})
         sheets_data = output_json.get("sheets", [])
-        readiness = output_json.get("comparison_readiness") or compute_comparison_readiness(output_json)
+        readiness = compute_comparison_readiness(output_json)
 
         wb_lob, wb_domain, wb_groups = merge_business_metadata(
             output_json.get("line_of_business", ""),
