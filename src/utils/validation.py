@@ -52,6 +52,7 @@ def compute_comparison_readiness(json_data):
         usable fingerprint + resolved (non-Col_*) sources
       comparison_mode: full | degraded | insufficient
       comparable_columns, ready_columns, degraded_columns, missing_columns
+      column_diagnostics: list of per-column diagnostic dicts for non-ready columns
 
     Rules:
       FULL        = >=80% ready AND no critical failures (externals, mixed lineage,
@@ -59,6 +60,9 @@ def compute_comparison_readiness(json_data):
       DEGRADED    = score >= 0.4 or some recoverable issues
       INSUFFICIENT = majority of KPI columns lack usable lineage
     """
+    import logging
+    _logger = logging.getLogger(__name__)
+
     sheets = json_data.get("sheets", [])
     comparable = 0
     ready = 0
@@ -70,18 +74,26 @@ def compute_comparison_readiness(json_data):
     has_parser_degraded = False
     unresolved_header_count = 0
 
+    # Per-column diagnostic details for non-ready columns
+    column_diagnostics = []
+
     # Workbook-level external links
     meta = json_data.get("workbook_metadata") or {}
     if meta.get("external_links"):
         has_external = True
         critical_flags.append("external_links")
 
+    file_name = json_data.get("file_name", "unknown")
+
     for sheet in sheets:
         if sheet.get("sheet_type") not in ("summary_report",):
             continue
+        sheet_name = sheet.get("sheet_name", "")
         for table in sheet.get("tables", []):
+            table_name = table.get("table_name", "")
             for col in table.get("columns", []):
                 col_type = col.get("type", "")
+                col_name = col.get("column_name", "")
                 # Checks are validation — never count as KPI readiness
                 if col_type == "check":
                     continue
@@ -96,39 +108,82 @@ def compute_comparison_readiness(json_data):
                 comp_type = lineage.get("computation_type", "") or ""
                 resolved_by = lineage.get("resolved_by", "") or col.get("resolved_by", "")
 
-                if col.get("lineage_is_mixed") or lineage.get("lineage_is_mixed"):
+                is_mixed = bool(col.get("lineage_is_mixed") or lineage.get("lineage_is_mixed"))
+                is_external = bool(col.get("references_external") or lineage.get("references_external"))
+
+                if is_mixed:
                     has_mixed = True
-                if col.get("references_external") or lineage.get("references_external"):
+                if is_external:
                     has_external = True
                 if resolved_by in ("degraded", "none"):
                     has_parser_degraded = True
 
                 resolved_sources = [s for s in sources if _source_is_resolved(s)]
-                has_unresolved = any(not _source_is_resolved(s) for s in sources) if sources else False
+                unresolved_sources = [s for s in sources if not _source_is_resolved(s)]
+                has_unresolved = bool(unresolved_sources)
                 if has_unresolved:
                     unresolved_header_count += 1
 
                 has_fp = _fingerprint_is_usable(fingerprint, comp_type)
                 has_sources = bool(resolved_sources)
                 roles_ok = True
+                roles_fail_reason = ""
                 if comp_type in ("SUMIFS", "MULTI_AGG"):
                     params = lineage.get("computation_params") or {}
-                    if not params.get("sum_column") or str(params.get("sum_column", "")).startswith("Col_"):
+                    sum_col = params.get("sum_column", "")
+                    if not sum_col or str(sum_col).startswith("Col_"):
                         roles_ok = False
+                        roles_fail_reason = f"sum_column='{sum_col}' is unresolved"
 
                 if (
                     has_fp
                     and has_sources
                     and roles_ok
                     and comp_type in _FULL_TYPES
-                    and not col.get("lineage_is_mixed")
+                    and not is_mixed
                     and resolved_by not in ("degraded", "none")
                 ):
                     ready += 1
+                    col_status = "ready"
                 elif has_fp or has_sources:
                     degraded += 1
+                    col_status = "degraded"
                 else:
                     missing += 1
+                    col_status = "missing"
+
+                # Build diagnostic for every non-ready column
+                if col_status != "ready":
+                    failures = []
+                    if not has_fp:
+                        fp_reason = "empty fingerprint" if not fingerprint else f"unusable fingerprint for {comp_type}"
+                        failures.append(f"fingerprint: {fp_reason}")
+                    if not has_sources:
+                        if not sources:
+                            failures.append("sources: no ultimate_raw_sources at all")
+                        else:
+                            failures.append(f"sources: all unresolved ({unresolved_sources[:3]})")
+                    if not roles_ok:
+                        failures.append(f"roles: {roles_fail_reason}")
+                    if comp_type and comp_type not in _FULL_TYPES:
+                        failures.append(f"computation_type: '{comp_type}' not in supported set")
+                    if not comp_type:
+                        failures.append("computation_type: empty/missing")
+                    if is_mixed:
+                        failures.append("lineage_is_mixed: true")
+                    if is_external:
+                        failures.append("references_external: true")
+                    if resolved_by in ("degraded", "none"):
+                        failures.append(f"resolved_by: '{resolved_by}'")
+
+                    diag = {
+                        "column": col_name,
+                        "table": table_name,
+                        "sheet": sheet_name,
+                        "status": col_status,
+                        "failures": failures,
+                    }
+                    column_diagnostics.append(diag)
 
     if has_external:
         critical_flags.append("external_refs")
@@ -163,6 +218,23 @@ def compute_comparison_readiness(json_data):
         mode = "insufficient"
         score = 0.0
 
+    # Log diagnostic summary
+    if mode != "full" and column_diagnostics:
+        _logger.info(
+            "Extraction quality for '%s': score=%.2f mode=%s "
+            "(comparable=%d ready=%d degraded=%d missing=%d flags=%s)",
+            file_name, score, mode, comparable, ready, degraded, missing,
+            critical_flags,
+        )
+        for diag in column_diagnostics[:10]:  # Log first 10 to avoid spam
+            _logger.info(
+                "  Column '%s' [%s/%s] status=%s: %s",
+                diag["column"], diag["table"], diag["sheet"],
+                diag["status"], "; ".join(diag["failures"]),
+            )
+        if len(column_diagnostics) > 10:
+            _logger.info("  ... and %d more non-ready columns", len(column_diagnostics) - 10)
+
     return {
         "extraction_quality_score": score,
         "comparison_mode": mode,
@@ -172,6 +244,7 @@ def compute_comparison_readiness(json_data):
         "missing_columns": missing,
         "critical_flags": critical_flags,
         "unresolved_header_count": unresolved_header_count,
+        "column_diagnostics": column_diagnostics,
     }
 
 

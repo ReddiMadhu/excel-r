@@ -451,15 +451,15 @@ class Recommender:
         wb_map: Dict[int, Dict],
     ) -> None:
         """
-        Ensure merge recommendations are symmetric.
-
-        The Jaccard overlap score is symmetric, so if A qualifies to merge
-        with B, B qualifies to merge with A. However, B might independently
-        have chosen a different most-similar partner C and be marked 'keep'.
+        Ensure merge recommendations are symmetric — but ONLY when the
+        pairwise overlap scores actually justify it.
 
         For every A→merge with B where B says 'keep':
-          - Update B to 'merge' pointing back at A, using the same overlap
-            scores that triggered A's merge decision.
+          - Check that A's overlap scores with B meet merge thresholds.
+          - If yes: update B to 'merge' pointing back at A, replacing
+            contradictory "keep" reasons with merge-specific context.
+          - If no: leave B as 'keep' (the merge was triggered by a
+            different signal that doesn't apply symmetrically).
 
         For every A→merge with B where B says 'merge with C' (chain case):
           - Leave the chain as-is. The user sees both sides and can resolve.
@@ -482,13 +482,33 @@ class Recommender:
             if partner.get("action") != "keep":
                 continue
 
+            # GATE: Only mirror merge if the overlap scores actually meet thresholds.
+            # Without this, workbooks with near-zero overlap get incorrectly merged.
+            kpi_score = decision.get("kpi_overlap_score", 0.0)
+            ds_score = decision.get("datasource_overlap_score", 0.0)
+            if kpi_score < self.merge_kpi or ds_score < self.merge_ds:
+                logger.info(
+                    "Merge normalization skipped: '%s' → '%s' (KPI=%.2f < %.2f or DS=%.2f < %.2f)",
+                    decision["workbook_name"],
+                    partner.get("workbook_name", ""),
+                    kpi_score, self.merge_kpi,
+                    ds_score, self.merge_ds,
+                )
+                continue
+
+            # Clear contradictory "keep" reasons before adding merge context
+            partner["reasons"] = [
+                r for r in partner.get("reasons", [])
+                if "distinct analysis" not in r.lower()
+                and "no strong overlap" not in r.lower()
+            ]
             partner["action"] = "merge"
             partner["merge_with_id"] = wb_id
             partner["merge_with_name"] = wb_map.get(wb_id, {}).get("name", "")
             partner["reasons"].append(
                 f"Identified as consolidation candidate with '{decision['workbook_name']}' "
-                f"(KPI overlap: {decision.get('kpi_overlap_score', 0):.0%}, "
-                f"datasource overlap: {decision.get('datasource_overlap_score', 0):.0%})."
+                f"(KPI overlap: {kpi_score:.0%}, "
+                f"datasource overlap: {ds_score:.0%})."
             )
             logger.info(
                 "Merge pair normalized: '%s' ↔ '%s'",

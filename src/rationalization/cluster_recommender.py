@@ -203,21 +203,77 @@ def assign_roles_for_cluster(
 
         if comparison_mode == "insufficient" or quality < min_quality:
             role = "review"
+            # Fetch extraction readiness details for diagnostic context
+            _diag_parts = []
+            wb_row = db.query_one(
+                "SELECT extraction_quality_score, comparison_mode FROM workbooks WHERE id = ?",
+                (wb_id,),
+            )
+            if wb_row:
+                _diag_parts.append(
+                    f"extraction_quality={wb_row.get('extraction_quality_score', 'N/A')}, "
+                    f"comparison_mode={wb_row.get('comparison_mode', 'N/A')}"
+                )
+            # Count non-ready columns for context
+            _total_cf = db.query_one(
+                "SELECT COUNT(*) as cnt FROM calculated_fields WHERE workbook_id = ? "
+                "AND column_type IN ('formula_based','pivot_value','total')",
+                (wb_id,),
+            )
+            _cf_count = _total_cf["cnt"] if _total_cf else 0
+            _diag_parts.append(f"KPI columns extracted: {_cf_count}")
+
             if comparison_mode == "insufficient":
                 reasons.append(
-                    f"comparison_mode=insufficient — Governance Review required "
-                    f"(extraction quality {quality:.0%})."
+                    f"comparison_mode=insufficient — extraction could not produce "
+                    f"reliable lineage for KPI columns. "
+                    f"Governance Review required (quality={quality:.0%}). "
+                    f"Diagnostics: {'; '.join(_diag_parts)}."
                 )
             else:
                 reasons.append(
-                    f"Extraction quality {quality:.0%} below {min_quality:.0%} — "
-                    "manual Governance Review required before decommission."
+                    f"Extraction quality {quality:.0%} below {min_quality:.0%} threshold — "
+                    f"manual Governance Review required before decommission. "
+                    f"Diagnostics: {'; '.join(_diag_parts)}."
                 )
+            logger.info(
+                "Review gate: workbook %d — quality=%.2f mode=%s (%s)",
+                wb_id, quality, comparison_mode, "; ".join(_diag_parts),
+            )
 
         elif not my_kpis:
             role = "review"
-            reasons.append(
-                "No KPIs extracted for this workbook — cannot assess redundancy."
+            # Check whether this is a KPI canonicalization issue or extraction issue
+            _raw_cf = db.query_one(
+                "SELECT COUNT(*) as cnt FROM calculated_fields WHERE workbook_id = ?",
+                (wb_id,),
+            )
+            _raw_count = _raw_cf["cnt"] if _raw_cf else 0
+            _kpi_cache_count = db.query_one(
+                "SELECT COUNT(*) as cnt FROM kpi_cluster_cache",
+            )
+            _cache_count = _kpi_cache_count["cnt"] if _kpi_cache_count else 0
+            if _raw_count == 0:
+                reasons.append(
+                    "No calculated fields (KPI columns) were extracted from this workbook — "
+                    "the extraction pipeline found no formula_based/pivot_value/total columns "
+                    "in summary_report sheets. Cannot assess redundancy."
+                )
+            elif _cache_count == 0:
+                reasons.append(
+                    f"Workbook has {_raw_count} calculated field(s) but KPI canonicalization "
+                    f"has not been run (kpi_cluster_cache is empty). "
+                    f"Run BI Intelligence first to group metrics across workbooks."
+                )
+            else:
+                reasons.append(
+                    f"Workbook has {_raw_count} calculated field(s) but none matched "
+                    f"the KPI cluster cache ({_cache_count} canonical entries). "
+                    f"Column names may not have been canonicalized correctly."
+                )
+            logger.info(
+                "Review gate: workbook %d — no canonical KPIs (raw_cf=%d, cache=%d)",
+                wb_id, _raw_count, _cache_count,
             )
 
         elif kpi_containment_in_cluster >= 1.0 and ds_containment_with_canonical >= decomm_ds_thresh:

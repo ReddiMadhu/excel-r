@@ -792,7 +792,158 @@ class RationalizationEngine:
         logger.info("Summary: %s", json.dumps(summary, indent=2))
         logger.info("═" * 60)
 
+        # Write diagnostic log for full traceability
+        self._write_diagnostic_log(summary)
+
         return summary
+
+    def _write_diagnostic_log(self, pipeline_summary: Dict[str, Any]) -> None:
+        """
+        Write a comprehensive diagnostic log file to data/output/.
+
+        Captures per-workbook extraction quality, KPI state, and
+        rationalization decision reasoning for full root-cause traceability.
+        """
+        import os
+        from datetime import datetime
+
+        try:
+            output_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "data", "output",
+            )
+            os.makedirs(output_dir, exist_ok=True)
+            log_path = os.path.join(output_dir, "rationalization_diagnostic.log")
+
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(f"{'=' * 80}\n")
+                f.write(f"RATIONALIZATION DIAGNOSTIC LOG\n")
+                f.write(f"Generated: {datetime.utcnow().isoformat()}\n")
+                f.write(f"Pipeline Status: {pipeline_summary.get('status', 'unknown')}\n")
+                f.write(f"{'=' * 80}\n\n")
+
+                # ── Section 1: Workbook Extraction Quality ──
+                workbooks = self.db.query(
+                    "SELECT id, name, extraction_quality_score, comparison_mode, "
+                    "extraction_complexity, sheet_count FROM workbooks ORDER BY id"
+                )
+                f.write(f"{'─' * 60}\n")
+                f.write(f"SECTION 1: WORKBOOK EXTRACTION QUALITY\n")
+                f.write(f"{'─' * 60}\n\n")
+
+                for wb in workbooks:
+                    quality = wb.get("extraction_quality_score")
+                    mode = wb.get("comparison_mode", "N/A")
+                    cf_row = self.db.query_one(
+                        "SELECT COUNT(*) as cnt FROM calculated_fields WHERE workbook_id = ?",
+                        (wb["id"],),
+                    )
+                    cf_count = cf_row["cnt"] if cf_row else 0
+                    kpi_row = self.db.query_one(
+                        """
+                        SELECT COUNT(DISTINCT kc.canonical_name) as cnt
+                        FROM calculated_fields cf
+                        JOIN kpi_cluster_cache kc ON cf.name = kc.original_name COLLATE NOCASE
+                        WHERE cf.workbook_id = ?
+                          AND cf.column_type IN ('formula_based','pivot_value','total')
+                        """,
+                        (wb["id"],),
+                    )
+                    kpi_count = kpi_row["cnt"] if kpi_row else 0
+
+                    quality_str = f"{quality:.2%}" if quality is not None else "MISSING"
+                    flag = "⚠" if (quality is not None and quality < 0.6) or mode == "insufficient" else "✓"
+                    f.write(
+                        f"  {flag} [{wb['id']}] {wb['name']}\n"
+                        f"    extraction_quality_score = {quality_str}\n"
+                        f"    comparison_mode          = {mode}\n"
+                        f"    sheets                   = {wb.get('sheet_count', 0)}\n"
+                        f"    calculated_fields        = {cf_count}\n"
+                        f"    canonical_kpis           = {kpi_count}\n"
+                    )
+                    if (quality is not None and quality < 0.6) or mode == "insufficient":
+                        f.write(
+                            f"    → REVIEW GATE TRIGGERED: This workbook will be routed to "
+                            f"Governance Review because extraction quality is below threshold.\n"
+                        )
+                    if kpi_count == 0 and cf_count > 0:
+                        f.write(
+                            f"    → WARNING: Has {cf_count} calculated fields but 0 canonical KPIs. "
+                            f"KPI canonicalization may not have matched column names.\n"
+                        )
+                    f.write("\n")
+
+                # ── Section 2: Recommendations ──
+                recs = self.db.query(
+                    "SELECT gr.*, w.name as wb_name FROM governance_recommendations gr "
+                    "JOIN workbooks w ON gr.workbook_id = w.id ORDER BY gr.action, w.name"
+                )
+                f.write(f"\n{'─' * 60}\n")
+                f.write(f"SECTION 2: RATIONALIZATION DECISIONS\n")
+                f.write(f"{'─' * 60}\n\n")
+
+                action_counts = {"keep": 0, "merge": 0, "decommission": 0, "review": 0}
+                for rec in recs:
+                    action = rec.get("action", "unknown")
+                    action_counts[action] = action_counts.get(action, 0) + 1
+
+                    reasons = rec.get("reasons", "[]")
+                    if isinstance(reasons, str):
+                        try:
+                            reasons = json.loads(reasons)
+                        except Exception:
+                            reasons = [reasons]
+
+                    icon = {"keep": "✓", "merge": "⇄", "decommission": "✕", "review": "⚠"}.get(action, "?")
+                    f.write(
+                        f"  {icon} [{rec['workbook_id']}] {rec.get('wb_name', '?')} → {action.upper()}\n"
+                    )
+                    if rec.get("merge_with_name"):
+                        f.write(f"    merge_with: {rec['merge_with_name']} (id={rec.get('merge_with_id')})\n")
+                    if rec.get("cluster_role"):
+                        f.write(f"    cluster_role: {rec['cluster_role']}\n")
+                    f.write(
+                        f"    kpi_overlap={rec.get('kpi_overlap_score', 0):.2%}  "
+                        f"ds_overlap={rec.get('datasource_overlap_score', 0):.2%}  "
+                        f"uniqueness={rec.get('uniqueness_score', 0):.2%}\n"
+                    )
+                    for i, reason in enumerate(reasons, 1):
+                        f.write(f"    reason {i}: {reason}\n")
+                    f.write("\n")
+
+                f.write(f"\n{'─' * 60}\n")
+                f.write(f"SUMMARY: {action_counts}\n")
+                f.write(f"{'─' * 60}\n")
+
+                # ── Section 3: Clusters ──
+                clusters = self.db.query(
+                    "SELECT * FROM workbook_clusters ORDER BY id"
+                )
+                if clusters:
+                    f.write(f"\n{'─' * 60}\n")
+                    f.write(f"SECTION 3: CLUSTERS\n")
+                    f.write(f"{'─' * 60}\n\n")
+                    for cl in clusters:
+                        members = self.db.query(
+                            "SELECT wcm.workbook_id, w.name FROM workbook_cluster_members wcm "
+                            "JOIN workbooks w ON wcm.workbook_id = w.id "
+                            "WHERE wcm.cluster_id = ?",
+                            (cl["id"],),
+                        )
+                        f.write(
+                            f"  Cluster {cl['id']}: {cl.get('cluster_name', '?')} "
+                            f"(size={cl.get('cluster_size')}, cohesion={cl.get('cohesion_score', 0):.3f})\n"
+                        )
+                        f.write(f"    canonical_target_id: {cl.get('canonical_target_id')}\n")
+                        f.write(f"    action_summary: {cl.get('cluster_action_summary', 'N/A')}\n")
+                        for m in members:
+                            f.write(f"      - [{m['workbook_id']}] {m['name']}\n")
+                        f.write("\n")
+
+            logger.info("Diagnostic log written to %s", log_path)
+
+        except Exception as e:
+            logger.warning("Failed to write diagnostic log: %s", e)
 
     def _delete_scoped_recommendations(self, workbook_ids: List[int]) -> None:
         placeholders = ",".join("?" * len(workbook_ids))
