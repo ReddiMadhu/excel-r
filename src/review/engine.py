@@ -131,9 +131,9 @@ def run_excel_review(
 
     try:
         import openpyxl
-        wb_form = openpyxl.load_workbook(file_path, data_only=False, read_only=False)
+        wb_form = openpyxl.load_workbook(file_path, data_only=False, read_only=True)
         try:
-            wb_val = openpyxl.load_workbook(file_path, data_only=True, read_only=False)
+            wb_val = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
         except Exception as e:
             wb_val = None
             summary["warnings"].append(f"data_only load failed: {e}")
@@ -149,7 +149,14 @@ def run_excel_review(
     unsupported_workbook = False
 
     try:
+        raw_keywords = ["data", "raw", "extract", "dump", "source", "query", "sql", "synthetic"]
         for ws_form in wb_form.worksheets:
+            title_lower = ws_form.title.lower()
+            # Skip pure raw data sheets in cell-level review (they contain no report formulas to audit)
+            if any(kw in title_lower for kw in raw_keywords) and ws_form.max_row and ws_form.max_row > 100:
+                logger.info("Excel Review: skipping raw data sheet '%s' (%d rows)", ws_form.title, ws_form.max_row)
+                continue
+
             sheets_scanned += 1
             ws_val = None
             if wb_val is not None:

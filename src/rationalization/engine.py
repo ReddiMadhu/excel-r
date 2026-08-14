@@ -500,6 +500,10 @@ class RationalizationEngine:
 
         _finalize_pipeline_status(summary, mandatory_failed, warnings)
         self._set_phase(summary["status"])
+
+        # Write diagnostic log on every rationalization run
+        self._write_diagnostic_log(summary)
+
         return summary
 
     # ─── LLM Stage 1: Cluster Membership Validation ──────────────────
@@ -861,11 +865,72 @@ class RationalizationEngine:
                         f"    calculated_fields        = {cf_count}\n"
                         f"    canonical_kpis           = {kpi_count}\n"
                     )
-                    if (quality is not None and quality < 0.6) or mode == "insufficient":
+                    if (quality is not None and quality < 0.6) or mode == "insufficient" or mode == "degraded":
                         f.write(
-                            f"    → REVIEW GATE TRIGGERED: This workbook will be routed to "
-                            f"Governance Review because extraction quality is below threshold.\n"
+                            f"    → REVIEW/DEGRADATION DIAGNOSTICS:\n"
                         )
+                        # Check json_output_path first for rich column_diagnostics
+                        wb_detail = self.db.query_one("SELECT json_output_path FROM workbooks WHERE id = ?", (wb["id"],))
+                        jpath = wb_detail.get("json_output_path") if wb_detail else None
+                        printed_from_json = False
+                        if jpath and os.path.exists(jpath):
+                            try:
+                                with open(jpath, "r", encoding="utf-8") as jf:
+                                    jdata = json.load(jf)
+                                read_meta = jdata.get("comparison_readiness", {})
+                                diags = read_meta.get("column_diagnostics", [])
+                                if diags:
+                                    printed_from_json = True
+                                    for d in diags[:20]:
+                                        f.write(
+                                            f"       - Column '{d.get('column')}' [{d.get('table')}/{d.get('sheet')}]: "
+                                            f"status={d.get('status')} | Failures: {'; '.join(d.get('failures', []))}\n"
+                                        )
+                                    if len(diags) > 20:
+                                        f.write(f"       - ... and {len(diags) - 20} more non-ready columns\n")
+                            except Exception:
+                                pass
+
+                        if not printed_from_json:
+                            # Fallback to querying columns table
+                            bad_cols = self.db.query(
+                                """
+                                SELECT column_name, table_name, column_type, formula, resolved_by, formula_lineage
+                                FROM columns
+                                WHERE workbook_id = ? AND column_type IN ('formula_based','pivot_value','total')
+                                """,
+                                (wb["id"],),
+                            )
+                            degraded_count = 0
+                            for col in bad_cols:
+                                lin = col.get("formula_lineage")
+                                if isinstance(lin, str):
+                                    try:
+                                        lin = json.loads(lin)
+                                    except Exception:
+                                        lin = {}
+                                elif not isinstance(lin, dict):
+                                    lin = {}
+                                
+                                srcs = lin.get("ultimate_raw_sources") or []
+                                unresolved = [s for s in srcs if str(s).startswith("Col_")]
+                                reasons_col = []
+                                if unresolved:
+                                    reasons_col.append(f"unresolved headers {unresolved[:3]}")
+                                if col.get("resolved_by") in ("degraded", "none", "unsupported"):
+                                    reasons_col.append(f"parser resolved_by={col.get('resolved_by')}")
+                                if not lin.get("fingerprint"):
+                                    reasons_col.append("missing computation fingerprint")
+                                
+                                if reasons_col:
+                                    degraded_count += 1
+                                    if degraded_count <= 15:
+                                        f.write(
+                                            f"       - Column '{col.get('column_name')}' in '{col.get('table_name')}': "
+                                            f"formula='{col.get('formula')}' | Issues: {'; '.join(reasons_col)}\n"
+                                        )
+                            if degraded_count > 15:
+                                f.write(f"       - ... and {degraded_count - 15} more degraded columns\n")
                     if kpi_count == 0 and cf_count > 0:
                         f.write(
                             f"    → WARNING: Has {cf_count} calculated fields but 0 canonical KPIs. "

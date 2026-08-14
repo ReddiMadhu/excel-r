@@ -291,3 +291,18 @@ async def send_email_to_team(req: SendEmailRequest):
     logger.info("Governance team notified at %s: rationalization results compiled. Subject: %s", req.email, req.subject)
     return {"status": "success", "message": f"Governance report has been successfully emailed to {req.email}."}
 
+
+@router.get("/diagnostic-log")
+async def get_diagnostic_log():
+    """Retrieve the latest rationalization diagnostic log content."""
+    import os
+    from fastapi.responses import PlainTextResponse
+    log_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "output", "rationalization_diagnostic.log")
+    )
+    if not os.path.exists(log_path):
+        return PlainTextResponse("No diagnostic log generated yet. Run BI Rationalization first.", status_code=404)
+    with open(log_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return PlainTextResponse(content)
+

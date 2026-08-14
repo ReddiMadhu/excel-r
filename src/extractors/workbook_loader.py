@@ -60,12 +60,18 @@ class SheetCacheWrapper:
         self.column_dimensions = getattr(ws, "column_dimensions", {})
         self.data_validations = getattr(ws, "data_validations", None)
         
-        limit_rows = None
-        if not cache_formatting:
-            if ws.max_row is None or self.max_row > 200:
-                limit_rows = 20
+        # Determine intelligent row bounds to prevent multi-gigabyte memory spikes
+        name_lower = ws.title.lower()
+        is_likely_raw = any(kw in name_lower for kw in ["data", "raw", "extract", "dump", "source", "query", "sql", "sheet1"])
+        
+        if is_likely_raw or not cache_formatting:
+            limit_rows = 50
+        elif ws.max_row and ws.max_row > 300:
+            limit_rows = 200
+        else:
+            limit_rows = 250  # Cap all summary sheets at 250 rows (sufficient for tables, totals, cards)
                 
-        print(f"  [Cache] Loading sheet '{ws.title}' into memory array...")
+        print(f"  [Cache] Loading sheet '{ws.title}' (limit_rows={limit_rows}) into memory array...")
         row_count = 0
         for row in ws.iter_rows():
             self._data.append([c.value for c in row])
@@ -142,7 +148,7 @@ class WorkbookCacheWrapper:
                 raw_keywords = ["data", "raw", "extract", "dump", "source", "query", "sql"]
                 if any(kw in name_lower for kw in raw_keywords):
                     sheet_cache_fmt = False
-                elif ws.max_row and ws.max_row > 500:
+                elif ws.max_row and ws.max_row > 300:
                     sheet_cache_fmt = False
                     
             cached_ws = SheetCacheWrapper(ws, cache_formatting=sheet_cache_fmt)
@@ -191,22 +197,33 @@ def get_sheet_used_range(ws):
 
 
 def get_non_empty_cells(ws):
-    """Count non-empty cells in the sheet."""
+    """Count non-empty cells in the sheet with capped iteration."""
     count = 0
+    scanned_rows = 0
     for row in ws.iter_rows(values_only=True):
         for val in row:
             if val is not None:
                 count += 1
+        scanned_rows += 1
+        if scanned_rows >= 500:
+            break
+    if ws.max_row and ws.max_row > 500 and scanned_rows > 0:
+        # Extrapolate for large raw datasets
+        count = int(count * (ws.max_row / scanned_rows))
     return count
 
 
 def get_formula_count(ws_formula):
-    """Count number of cells containing formulas in the sheet."""
+    """Count number of cells containing formulas in the sheet with capped iteration."""
     count = 0
+    scanned_rows = 0
     for row in ws_formula.iter_rows(values_only=True):
         for val in row:
             if val is not None and str(val).startswith('='):
                 count += 1
+        scanned_rows += 1
+        if scanned_rows >= 500:
+            break
     return count
 
 

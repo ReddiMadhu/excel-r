@@ -48,36 +48,37 @@ class FormulaRegion:
     pattern_counts: Dict[str, int] = field(default_factory=dict)
 
 
-def _scan_sheet_cells(ws_form, ws_val, sheet_name: str, max_cells: int = 200_000) -> List[CellInfo]:
-    """Collect non-empty cells with formulas or values (capped for performance)."""
+def _scan_sheet_cells(ws_form, ws_val, sheet_name: str, max_cells: int = 50_000) -> List[CellInfo]:
+    """Collect non-empty cells with formulas or values (streamed & capped for performance)."""
     cells: List[CellInfo] = []
-    min_r = ws_form.min_row or 1
-    max_r = ws_form.max_row or 1
-    min_c = ws_form.min_column or 1
-    max_c = ws_form.max_column or 1
     count = 0
-    for r in range(min_r, max_r + 1):
-        for c in range(min_c, max_c + 1):
-            form_cell = ws_form.cell(row=r, column=c)
-            raw = form_cell.value
+    
+    # Use streaming iter_rows for high-performance sequential scanning
+    form_rows = ws_form.iter_rows(values_only=False)
+    val_rows = ws_val.iter_rows(values_only=True) if ws_val is not None else None
+    
+    for r_idx, form_row in enumerate(form_rows, start=1):
+        val_row = next(val_rows, None) if val_rows is not None else None
+        
+        for c_idx, form_cell in enumerate(form_row, start=1):
+            raw = getattr(form_cell, "value", None)
             if raw is None or raw == "":
                 continue
+            
             val = None
-            if ws_val is not None:
-                try:
-                    val = ws_val.cell(row=r, column=c).value
-                except Exception:
-                    val = None
-            addr = f"{get_column_letter(c)}{r}"
+            if val_row and (c_idx - 1) < len(val_row):
+                val = val_row[c_idx - 1]
+                
+            addr = f"{get_column_letter(c_idx)}{r_idx}"
             formula = str(raw) if is_formula(raw) else None
             pattern = ""
             unsupported: List[str] = []
             if formula:
-                pattern, unsupported = structural_pattern_key(formula, r, c)
+                pattern, unsupported = structural_pattern_key(formula, r_idx, c_idx)
             cells.append(CellInfo(
                 sheet=sheet_name,
-                row=r,
-                col=c,
+                row=r_idx,
+                col=c_idx,
                 address=addr,
                 formula=formula,
                 value=val if formula is None else (val if val is not None else raw),
