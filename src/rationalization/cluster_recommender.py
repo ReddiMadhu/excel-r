@@ -124,7 +124,7 @@ def assign_roles_for_cluster(
     member_ids: List[int] = cluster["member_ids"]
     min_quality = _env_float("MIN_EXTRACTION_QUALITY", 0.60)
     decomm_ds_thresh = _env_float("DECOMMISSION_DS_THRESHOLD", 0.85)
-    merge_ds_thresh = _env_float("MERGE_DS_THRESHOLD", 0.60)
+    merge_ds_thresh = _env_float("MERGE_DS_THRESHOLD", 0.35)
 
     # ── Singleton shortcut ────────────────────────────────────
     if len(member_ids) == 1:
@@ -289,13 +289,19 @@ def assign_roles_for_cluster(
                 f"are fully covered by canonical target (workbook {canonical_id})."
             )
 
-        elif (len(kpis_not_in_target) > 0 or len(unique_kpis) > 0) and ds_overlap_with_canonical >= merge_ds_thresh:
+        elif (len(kpis_not_in_target) > 0 or len(unique_kpis) > 0 or ds_containment_with_canonical < decomm_ds_thresh) and (ds_overlap_with_canonical >= merge_ds_thresh or kpi_containment_in_target >= 0.50):
             role = "merge_source"
-            unique_count = len(kpis_not_in_target) if len(kpis_not_in_target) > 0 else len(unique_kpis)
-            reasons.append(
-                f"Contributes {unique_count} unique KPI(s) not found in canonical target "
-                f"(datasource overlap {ds_overlap_with_canonical:.0%} with canonical target)."
-            )
+            if len(kpis_not_in_target) > 0:
+                reasons.append(
+                    f"Merge candidate — contributes {len(kpis_not_in_target)} unique KPI(s) to be consolidated into canonical target "
+                    f"(datasource overlap {ds_overlap_with_canonical:.0%} with canonical target)."
+                )
+            else:
+                reasons.append(
+                    f"Merge candidate — shares {len(my_kpis)} KPI definitions with canonical target, "
+                    f"requiring data source consolidation into canonical target "
+                    f"(datasource overlap {ds_overlap_with_canonical:.0%}, containment {ds_containment_with_canonical:.0%})."
+                )
 
         else:
             role = "review"
@@ -391,13 +397,19 @@ def assign_roles_for_cluster(
                         f"All {len(my_kpis)} KPIs and {ds_containment_with_canonical:.0%} of data sources in this workbook "
                         f"are fully covered by canonical target (workbook {canonical_id})."
                     ]
-                elif (len(kpis_not_in_target) > 0 or len(unique_kpis) > 0) and ds_overlap_with_canonical >= merge_ds_thresh:
+                elif (len(kpis_not_in_target) > 0 or len(unique_kpis) > 0 or ds_containment_with_canonical < decomm_ds_thresh) and (ds_overlap_with_canonical >= merge_ds_thresh or kpi_containment_in_target >= 0.50):
                     role = "merge_source"
-                    unique_count = len(kpis_not_in_target) if len(kpis_not_in_target) > 0 else len(unique_kpis)
-                    reasons = [
-                        f"Contributes {unique_count} unique KPI(s) not found in canonical target "
-                        f"(datasource overlap {ds_overlap_with_canonical:.0%} with canonical target)."
-                    ]
+                    if len(kpis_not_in_target) > 0:
+                        reasons = [
+                            f"Merge candidate — contributes {len(kpis_not_in_target)} unique KPI(s) to be consolidated into canonical target "
+                            f"(datasource overlap {ds_overlap_with_canonical:.0%} with canonical target)."
+                        ]
+                    else:
+                        reasons = [
+                            f"Merge candidate — shares {len(my_kpis)} KPI definitions with canonical target, "
+                            f"requiring data source consolidation into canonical target "
+                            f"(datasource overlap {ds_overlap_with_canonical:.0%}, containment {ds_containment_with_canonical:.0%})."
+                        ]
                 else:
                     role = "review"
                     if kpi_containment_in_target >= 1.0 and ds_containment_with_canonical < decomm_ds_thresh:
