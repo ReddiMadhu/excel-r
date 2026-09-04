@@ -228,6 +228,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
     const srcReasons = cleanReasons(rec?.reasons);
     const tgtReasons = target ? cleanReasons(target.reasons) : [];
     const lReasons = swap ? tgtReasons : srcReasons;
+    const rReasons = swap ? srcReasons : tgtReasons;
     const srcMap = {};
     (data.source_kpis_detail || []).forEach(item => {
       srcMap[item.canonical_name] = item.original_name;
