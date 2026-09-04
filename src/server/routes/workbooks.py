@@ -1,17 +1,25 @@
 """
 Workbook Routes — GET /api/workbooks, GET /api/workbooks/{id}, DELETE /api/workbooks/{id}
 """
+import io
 import json
 import logging
+import os
 from typing import List, Optional
+import zipfile
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse, StreamingResponse
 
 from src.server.models.database import get_database
 from src.server.models.schemas import WorkbookSummary, WorkbookDetail
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Workbooks"])
+
+INPUT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "input")
+)
 
 
 def _parse_json_field(value):
@@ -183,3 +191,105 @@ async def delete_workbook(workbook_id: int):
         "message": f"Workbook '{workbook_name}' (id={workbook_id}) deleted successfully.",
         "agents_stale": True,
     }
+
+
+# ─── Input File Download Endpoints ─────────────────────────────────────
+
+@router.get("/input-files")
+async def list_input_files():
+    """List all available input Excel files with metadata and download URLs."""
+    if not os.path.exists(INPUT_DIR):
+        return {"files": [], "total_files": 0, "download_all_url": None}
+
+    files = []
+    for fname in sorted(os.listdir(INPUT_DIR)):
+        if fname.lower().endswith((".xlsx", ".xls", ".xlsm")):
+            fpath = os.path.join(INPUT_DIR, fname)
+            if os.path.isfile(fpath):
+                files.append({
+                    "filename": fname,
+                    "size_bytes": os.path.getsize(fpath),
+                    "download_url": f"/api/input-files/{fname}",
+                })
+    return {
+        "files": files,
+        "total_files": len(files),
+        "download_all_url": "/api/input-files/download-all",
+    }
+
+
+@router.get("/input-files/download-all")
+async def download_all_input_files():
+    """Download all input Excel files bundled as a single zip archive."""
+    if not os.path.exists(INPUT_DIR):
+        raise HTTPException(status_code=404, detail="Input files directory not found")
+
+    excel_files = [
+        f for f in sorted(os.listdir(INPUT_DIR))
+        if f.lower().endswith((".xlsx", ".xls", ".xlsm")) and os.path.isfile(os.path.join(INPUT_DIR, f))
+    ]
+    if not excel_files:
+        raise HTTPException(status_code=404, detail="No input files found to download")
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname in excel_files:
+            fpath = os.path.join(INPUT_DIR, fname)
+            zf.write(fpath, arcname=fname)
+
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="input_excel_files.zip"'},
+    )
+
+
+@router.get("/input-files/{filename}")
+async def download_input_file(filename: str):
+    """Download a single input Excel file by filename (e.g. 1.xlsx, 4.xlsx)."""
+    safe_name = os.path.basename(filename)
+    fpath = os.path.abspath(os.path.join(INPUT_DIR, safe_name))
+    if not fpath.startswith(INPUT_DIR) or not os.path.isfile(fpath):
+        raise HTTPException(status_code=404, detail=f"File '{safe_name}' not found in input files directory")
+
+    return FileResponse(
+        path=fpath,
+        filename=safe_name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@router.get("/workbooks/{workbook_id}/download")
+async def download_workbook_file(workbook_id: int):
+    """Download the original Excel file for a workbook by its workbook ID."""
+    db = get_database()
+    wb = db.query_one("SELECT id, name, source_file FROM workbooks WHERE id = ?", (workbook_id,))
+
+    candidates = []
+    if wb:
+        if wb.get("source_file"):
+            candidates.append(wb["source_file"])
+            candidates.append(os.path.join(INPUT_DIR, os.path.basename(wb["source_file"])))
+        if wb.get("name"):
+            candidates.append(os.path.join(INPUT_DIR, f"{wb['name']}.xlsx"))
+    candidates.append(os.path.join(INPUT_DIR, f"{workbook_id}.xlsx"))
+
+    found_path = None
+    for cand in candidates:
+        if cand and os.path.isfile(cand):
+            found_path = cand
+            break
+
+    if not found_path:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source Excel file not found for workbook {workbook_id}",
+        )
+
+    download_name = os.path.basename(found_path)
+    return FileResponse(
+        path=found_path,
+        filename=download_name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
