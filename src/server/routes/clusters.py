@@ -283,12 +283,10 @@ async def get_cluster_comparison(cluster_id: int):
     }
 
 
-def _get_workbook_kpis(db, workbook_id: int) -> List[str]:
+def _get_workbook_kpis_detailed(db, workbook_id: int) -> Tuple[List[str], List[Dict[str, str]]]:
     """
-    Get canonical KPI names for a workbook.
-    Uses kpi_cluster_cache for canonical name mapping, falls back to raw names.
+    Get canonical KPI names and detailed mappings {canonical_name, original_name} for a workbook.
     """
-    # Build canonical name lookup from kpi_cluster_cache
     canon_rows = db.query(
         "SELECT original_name, canonical_name FROM kpi_cluster_cache"
     )
@@ -296,7 +294,6 @@ def _get_workbook_kpis(db, workbook_id: int) -> List[str]:
     for cr in canon_rows:
         canon_map[cr["original_name"].lower()] = cr["canonical_name"]
 
-    # Get formula-based / pivot / total calculated fields for this workbook
     wb_fields = db.query(
         """SELECT DISTINCT name FROM calculated_fields
            WHERE workbook_id = ?
@@ -304,16 +301,30 @@ def _get_workbook_kpis(db, workbook_id: int) -> List[str]:
         (workbook_id,),
     )
 
-    # Deduplicate by canonical name (case-insensitive)
     kpi_map = {}
+    details = []
     for cf in wb_fields:
-        orig_lower = cf["name"].lower()
-        canon_name = canon_map.get(orig_lower, cf["name"])
+        orig_name = cf["name"]
+        orig_lower = orig_name.lower()
+        canon_name = canon_map.get(orig_lower, orig_name)
         dedupe_key = canon_name.lower()
         if dedupe_key not in kpi_map:
             kpi_map[dedupe_key] = canon_name
+            details.append({
+                "canonical_name": canon_name,
+                "original_name": orig_name
+            })
 
-    return sorted(kpi_map.values())
+    return sorted(kpi_map.values()), details
+
+
+def _get_workbook_kpis(db, workbook_id: int) -> List[str]:
+    """
+    Get canonical KPI names for a workbook.
+    Uses kpi_cluster_cache for canonical name mapping, falls back to raw names.
+    """
+    kpis, _ = _get_workbook_kpis_detailed(db, workbook_id)
+    return kpis
 
 
 def _get_workbook_rec_full(db, workbook_id: int) -> Optional[Dict[str, Any]]:
@@ -442,8 +453,10 @@ async def get_cluster_member_detail(cluster_id: int, workbook_id: int):
         target_rec = _get_workbook_rec_full(db, target_id)
 
     # Get KPIs for both workbooks
-    source_kpis = _get_workbook_kpis(db, workbook_id)
-    target_kpis = _get_workbook_kpis(db, target_id) if target_id and target_id != workbook_id else []
+    source_kpis, source_kpis_detail = _get_workbook_kpis_detailed(db, workbook_id)
+    target_kpis, target_kpis_detail = (
+        _get_workbook_kpis_detailed(db, target_id) if target_id and target_id != workbook_id else ([], [])
+    )
 
     # Compute overlaps
     source_kpi_set = set(source_kpis)
@@ -492,6 +505,8 @@ async def get_cluster_member_detail(cluster_id: int, workbook_id: int):
 
         "source_kpis": source_kpis,
         "target_kpis": target_kpis,
+        "source_kpis_detail": source_kpis_detail,
+        "target_kpis_detail": target_kpis_detail,
 
         "shared_kpis": shared_kpis,
         "source_only_kpis": source_only_kpis,
@@ -556,7 +571,7 @@ async def get_cluster_multi_compare(cluster_id: int, workbook_ids: str = ""):
 
     # Get target data (cached once)
     target_rec = _get_workbook_rec_full(db, canonical_target_id) if canonical_target_id else None
-    target_kpis = _get_workbook_kpis(db, canonical_target_id) if canonical_target_id else []
+    target_kpis, target_kpis_detail = _get_workbook_kpis_detailed(db, canonical_target_id) if canonical_target_id else ([], [])
     target_kpi_set = set(target_kpis)
 
     # Target DS info
@@ -577,7 +592,7 @@ async def get_cluster_multi_compare(cluster_id: int, workbook_ids: str = ""):
         )
 
         # KPI overlap
-        source_kpis = _get_workbook_kpis(db, wb_id)
+        source_kpis, source_kpis_detail = _get_workbook_kpis_detailed(db, wb_id)
         source_kpi_set = set(source_kpis)
         shared_kpis = sorted([k for k in source_kpis if k in target_kpi_set])
         source_only_kpis = sorted([k for k in source_kpis if k not in target_kpi_set])
@@ -624,6 +639,7 @@ async def get_cluster_multi_compare(cluster_id: int, workbook_ids: str = ""):
             "type": wb_type,
             "rec": source_rec,
             "source_kpis": source_kpis,
+            "source_kpis_detail": source_kpis_detail,
             "shared_kpis": shared_kpis,
             "source_only_kpis": source_only_kpis,
             "target_only_kpis": target_only_kpis,
@@ -663,6 +679,7 @@ async def get_cluster_multi_compare(cluster_id: int, workbook_ids: str = ""):
         "canonical_target_id": canonical_target_id,
         "target_rec": target_rec,
         "target_kpis": target_kpis,
+        "target_kpis_detail": target_kpis_detail,
         "target_reasons": target_reasons,
         "candidates": candidates_result,
     }

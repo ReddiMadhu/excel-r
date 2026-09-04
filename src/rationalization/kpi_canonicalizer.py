@@ -52,8 +52,14 @@ def load_kpi_normalization_config(config_path: Optional[str] = None) -> Dict[str
     # Fallback defaults if config file is not found
     _CACHED_CONFIG = {
         "aggregation_prefixes": ["sum of ", "count of ", "avg of ", "average of ", "total of ", "max of ", "min of "],
-        "explicit_prefixes": ["LFG ", "LNBAR 2024 EB "],
+        "explicit_prefixes": ["LFG ", "LNBAR "],
         "protected_prefixes": ["Net ", "Gross ", "Total ", "Non-", "3rd Party "],
+        "synonyms": {
+            "active policy count": "Policy Count",
+            "count": "Policy Count",
+            "tax reserve": "2024 EB Tax Reserve",
+            "lnbar 2024 eb tax reserve": "2024 EB Tax Reserve",
+        },
     }
     return _CACHED_CONFIG
 
@@ -63,7 +69,7 @@ def normalize_kpi_name(name: str, config: Optional[Dict[str, Any]] = None) -> st
 
     1. Strips aggregation wrappers (e.g., 'Sum of GA Stat Reserve' -> 'GA Stat Reserve')
     2. Strips portfolio-specific explicit prefixes unless protected
-    3. Normalizes whitespace and casing
+    3. Normalizes spelling variants, punctuation, casing, and standard synonyms
     """
     if not name:
         return ""
@@ -72,6 +78,7 @@ def normalize_kpi_name(name: str, config: Optional[Dict[str, Any]] = None) -> st
     agg_prefixes = cfg.get("aggregation_prefixes", [])
     exp_prefixes = cfg.get("explicit_prefixes", [])
     protected_prefixes = cfg.get("protected_prefixes", [])
+    synonyms = cfg.get("synonyms", {})
 
     cleaned = name.strip()
 
@@ -88,18 +95,36 @@ def normalize_kpi_name(name: str, config: Optional[Dict[str, Any]] = None) -> st
     # Strip explicit prefixes unless it starts with a protected prefix
     is_protected = any(cleaned.lower().startswith(p.lower()) for p in protected_prefixes)
     if not is_protected:
-        for p in exp_prefixes:
+        for p in sorted(exp_prefixes, key=len, reverse=True):
             if cleaned.lower().startswith(p.lower()):
                 cleaned = cleaned[len(p):].strip()
                 break
     else:
         # If it starts with an explicit prefix followed by a protected prefix, strip only the explicit prefix
-        for p in exp_prefixes:
+        for p in sorted(exp_prefixes, key=len, reverse=True):
             if cleaned.lower().startswith(p.lower()):
                 remainder = cleaned[len(p):].strip()
                 if remainder:
                     cleaned = remainder
                 break
+
+    # Normalize 'and' vs '&'
+    cleaned = re.sub(r"\s+and\s+", " & ", cleaned, flags=re.IGNORECASE)
+
+    # Normalize spelling / hyphen spacing
+    cleaned = re.sub(r"\s*-\s*", " - ", cleaned)
+    cleaned = re.sub(r"\bnon\s*-\s*", "Non-", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bAdd1\b", "Addl", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bAddnl\b", "Addl", cleaned, flags=re.IGNORECASE)
+
+    # Standardize casing of common acronyms
+    cleaned = re.sub(r"\btai\b", "TAI", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bstat\b", lambda m: "STAT" if m.group(0).isupper() else "Stat", cleaned, flags=re.IGNORECASE)
+
+    # Check synonyms / aliases
+    lower = cleaned.lower()
+    if lower in synonyms:
+        cleaned = synonyms[lower]
 
     # Normalize internal spaces
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -127,6 +152,15 @@ def _sources_key(sources: List[str]) -> FrozenSet[str]:
     )
 
 
+def _normalize_fingerprint(fp: str) -> str:
+    """Normalize referenced tokens in formula fingerprints by stripping entity prefixes."""
+    if not fp:
+        return ""
+    fp_norm = re.sub(r"\b(lfg_|lnbar_|lnbar_2024_eb_)", "", fp, flags=re.IGNORECASE)
+    fp_norm = fp_norm.replace("add1_term", "addl_term").replace("addnl_term", "addl_term")
+    return fp_norm
+
+
 def _enrich_row(row: Dict[str, Any], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Add pre-computed comparison keys to a raw DB row so matching is fast.
@@ -148,6 +182,7 @@ def _enrich_row(row: Dict[str, Any], config: Optional[Dict[str, Any]] = None) ->
     row["_sources_key"] = _sources_key(sources)
     row["_def_norm"] = _normalize_definition(row.get("definition") or "")
     row["_fp"] = (row.get("fingerprint") or "").strip()
+    row["_fp_norm"] = _normalize_fingerprint(row["_fp"])
     row["_fp_pattern"] = (row.get("formula_pattern") or "").strip()
     row["_comp_type"] = (row.get("computation_type") or "").strip()
     row["_name_norm"] = normalize_kpi_name(row.get("name") or "", config)
@@ -228,10 +263,12 @@ def _content_match(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[str]:
     names contain opposite qualifiers (e.g. "Flexible" vs "Non-Flexible")
     are never clustered together on these weaker signals.
     """
-    # 1. Exact fingerprint match — only if names do not contradict AND fingerprint
-    #    encodes a resolved measure (not empty / Col_D).
-    if a["_fp"] and a["_fp"] == b["_fp"]:
-        fp_ok = "sum:col_" not in a["_fp"].lower() and a["_fp"].count("|") >= 1
+    # 1. Exact fingerprint match (using normalized fingerprints) — only if names do not contradict
+    #    AND fingerprint encodes a resolved measure (not empty / Col_D).
+    a_fp = a.get("_fp_norm") or a["_fp"]
+    b_fp = b.get("_fp_norm") or b["_fp"]
+    if a_fp and a_fp == b_fp:
+        fp_ok = "sum:col_" not in a_fp.lower() and a_fp.count("|") >= 1
         if fp_ok and not _names_contradict(a.get("name", ""), b.get("name", "")):
             return "fingerprint"
         # If names contradict, still allow match only when WHERE filters already
@@ -280,18 +317,12 @@ def _content_match(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[str]:
     #    Guarded by:
     #      (a) names must not contradict (checked above)
     #      (b) normalized name must be non-empty and at least 3 chars
-    #      (c) requires matching sources OR matching computation type OR matching fingerprints
     if (
         a.get("_name_norm")
         and len(a["_name_norm"]) >= 3
         and a["_name_norm"].lower() == b.get("_name_norm", "").lower()
     ):
-        if (
-            (a["_sources_key"] and a["_sources_key"] == b["_sources_key"])
-            or (a["_comp_type"] and a["_comp_type"] == b["_comp_type"])
-            or (a["_fp"] and a["_fp"] == b["_fp"])
-        ):
-            return "normalized_name"
+        return "normalized_name"
 
     return None
 

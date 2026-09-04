@@ -174,7 +174,8 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
   const { leftRec, rightRec, leftKpis, rightKpis, leftOnlyKpis, rightOnlyKpis,
     leftUniquePct, rightUniquePct, leftDsCount, rightDsCount,
     leftDsCoverage, rightDsCoverage, leftKpiCoverage, rightKpiCoverage,
-    leftReasons, rightReasons, swapColumns
+    leftReasons, rightReasons, swapColumns,
+    leftOrigMap, rightOrigMap
   } = useMemo(() => {
     if (!data) return {};
 
@@ -227,7 +228,16 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
     const srcReasons = cleanReasons(rec?.reasons);
     const tgtReasons = target ? cleanReasons(target.reasons) : [];
     const lReasons = swap ? tgtReasons : srcReasons;
-    const rReasons = swap ? srcReasons : tgtReasons;
+    const srcMap = {};
+    (data.source_kpis_detail || []).forEach(item => {
+      srcMap[item.canonical_name] = item.original_name;
+    });
+    const tgtMap = {};
+    (data.target_kpis_detail || []).forEach(item => {
+      tgtMap[item.canonical_name] = item.original_name;
+    });
+    const lOrigMap = swap ? tgtMap : srcMap;
+    const rOrigMap = swap ? srcMap : tgtMap;
 
     return {
       leftRec: lRec, rightRec: rRec, leftKpis: lKpis, rightKpis: rKpis,
@@ -238,6 +248,7 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
       leftKpiCoverage: lKpiCoverage, rightKpiCoverage: rKpiCoverage,
       leftReasons: lReasons, rightReasons: rReasons,
       swapColumns: swap,
+      leftOrigMap: lOrigMap, rightOrigMap: rOrigMap,
     };
   }, [data]);
 
@@ -731,17 +742,23 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
                   {type === 'merge' ? 'KPIs in Merge Candidate' : 'KPIs in This Report'}
                 </h3>
                 <div className="review-detail-kpi-list">
-                  {sharedKpis.map((k, i) => (
-                    <div key={`shared-${i}`} className="review-detail-kpi-item shared">
-                      <span>{k}</span>
-                      <span className="review-detail-shared-badge">SHARED</span>
-                    </div>
-                  ))}
-                  {(leftOnlyKpis || []).map((k, i) => (
-                    <div key={`source-${i}`} className="review-detail-kpi-item">
-                      <span>{k}</span>
-                    </div>
-                  ))}
+                  {sharedKpis.map((k, i) => {
+                    const origName = leftOrigMap?.[k] || k;
+                    return (
+                      <div key={`shared-${i}`} className="review-detail-kpi-item shared">
+                        <span>{origName}</span>
+                        <span className="review-detail-shared-badge">SHARED</span>
+                      </div>
+                    );
+                  })}
+                  {(leftOnlyKpis || []).map((k, i) => {
+                    const origName = leftOrigMap?.[k] || k;
+                    return (
+                      <div key={`source-${i}`} className="review-detail-kpi-item">
+                        <span>{origName}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -831,17 +848,23 @@ export default function ClusterMemberDetailPanel({ clusterId, workbookId }) {
                         {type === 'merge' ? 'KPIs in Consolidation Target' : 'Its KPIs'}
                       </h3>
                       <div className="review-detail-kpi-list">
-                        {sharedKpis.map((k, i) => (
-                          <div key={`target-shared-${i}`} className="review-detail-kpi-item shared">
-                            <span>{k}</span>
-                            <span className="review-detail-shared-badge">SHARED</span>
-                          </div>
-                        ))}
-                        {(rightOnlyKpis || []).map((k, i) => (
-                          <div key={`target-only-${i}`} className="review-detail-kpi-item">
-                            <span>{k}</span>
-                          </div>
-                        ))}
+                        {sharedKpis.map((k, i) => {
+                          const origName = rightOrigMap?.[k] || k;
+                          return (
+                            <div key={`target-shared-${i}`} className="review-detail-kpi-item shared">
+                              <span>{origName}</span>
+                              <span className="review-detail-shared-badge">SHARED</span>
+                            </div>
+                          );
+                        })}
+                        {(rightOnlyKpis || []).map((k, i) => {
+                          const origName = rightOrigMap?.[k] || k;
+                          return (
+                            <div key={`target-only-${i}`} className="review-detail-kpi-item">
+                              <span>{origName}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

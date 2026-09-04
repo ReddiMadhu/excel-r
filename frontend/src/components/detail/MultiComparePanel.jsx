@@ -212,17 +212,31 @@ export default function MultiComparePanel({ clusterId, compareIds, targetId, onE
                   <div className="compare-section">
                     <h3 className="compare-section-title">KPIs in This Report</h3>
                     <div className="compare-kpi-list">
-                      {(candidate.shared_kpis || []).map((k, i) => (
-                        <div key={`s-${i}`} className="compare-kpi-item shared">
-                          <span>{k}</span>
-                          <span className="compare-shared-badge">SHARED</span>
-                        </div>
-                      ))}
-                      {(candidate.source_only_kpis || []).map((k, i) => (
-                        <div key={`u-${i}`} className="compare-kpi-item">
-                          <span>{k}</span>
-                        </div>
-                      ))}
+                      {(candidate.shared_kpis || []).map((k, i) => {
+                        const origMap = {};
+                        (candidate.source_kpis_detail || []).forEach(item => {
+                          origMap[item.canonical_name] = item.original_name;
+                        });
+                        const origName = origMap[k] || k;
+                        return (
+                          <div key={`s-${i}`} className="compare-kpi-item shared">
+                            <span>{origName}</span>
+                            <span className="compare-shared-badge">SHARED</span>
+                          </div>
+                        );
+                      })}
+                      {(candidate.source_only_kpis || []).map((k, i) => {
+                        const origMap = {};
+                        (candidate.source_kpis_detail || []).forEach(item => {
+                          origMap[item.canonical_name] = item.original_name;
+                        });
+                        const origName = origMap[k] || k;
+                        return (
+                          <div key={`u-${i}`} className="compare-kpi-item">
+                            <span>{origName}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -288,17 +302,31 @@ export default function MultiComparePanel({ clusterId, compareIds, targetId, onE
               <div className="compare-section">
                 <h3 className="compare-section-title">Target KPIs</h3>
                 <div className="compare-kpi-list">
-                  {(targetSharedKpis || []).map((k, i) => (
-                    <div key={`ts-${i}`} className="compare-kpi-item shared">
-                      <span>{k}</span>
-                      <span className="compare-shared-badge">SHARED</span>
-                    </div>
-                  ))}
-                  {(targetOnlyKpis || []).map((k, i) => (
-                    <div key={`to-${i}`} className="compare-kpi-item target-kpi">
-                      <span>{k}</span>
-                    </div>
-                  ))}
+                  {(targetSharedKpis || []).map((k, i) => {
+                    const origMap = {};
+                    (data.target_kpis_detail || []).forEach(item => {
+                      origMap[item.canonical_name] = item.original_name;
+                    });
+                    const origName = origMap[k] || k;
+                    return (
+                      <div key={`ts-${i}`} className="compare-kpi-item shared">
+                        <span>{origName}</span>
+                        <span className="compare-shared-badge">SHARED</span>
+                      </div>
+                    );
+                  })}
+                  {(targetOnlyKpis || []).map((k, i) => {
+                    const origMap = {};
+                    (data.target_kpis_detail || []).forEach(item => {
+                      origMap[item.canonical_name] = item.original_name;
+                    });
+                    const origName = origMap[k] || k;
+                    return (
+                      <div key={`to-${i}`} className="compare-kpi-item target-kpi">
+                        <span>{origName}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

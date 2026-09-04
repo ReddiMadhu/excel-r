@@ -24,6 +24,7 @@ def _strip_punctuation(s: str) -> str:
 
 def _expand_abbreviations(text: str) -> str:
     """Expand known abbreviations in a normalized token."""
+    text = text.replace("add1_term", "addl_term").replace("addnl_term", "addl_term")
     parts = text.split("_")
     expanded = []
     for part in parts:

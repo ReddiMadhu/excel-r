@@ -1,0 +1,43 @@
+# KPI Normalization Configuration
+# ================================
+# Deterministic normalization rules for KPI canonicalization.
+# No fuzzy matching, no Levenshtein similarity.
+# Only explicit, auditable transformations.
+
+kpi_normalization:
+  # Level 1: Strip aggregation function wrappers
+  # "Sum of GA Stat Reserve" → "GA Stat Reserve"
+  aggregation_prefixes:
+    - "sum of "
+    - "count of "
+    - "avg of "
+    - "average of "
+    - "total of "
+    - "max of "
+    - "min of "
+
+  # Level 1: Strip portfolio-specific naming prefixes
+  # "LFG Net Face" → "Net Face"
+  # "LNBAR 2024 EB Tax Reserve" → "2024 EB Tax Reserve"
+  explicit_prefixes:
+    - "LNBAR 2024 EB "
+    - "LFG "
+    - "LNBAR "
+
+  # Safety: Never strip these — they change business meaning
+  # "Net Revenue" ≠ "Revenue", "Gross Face" ≠ "Face"
+  protected_prefixes:
+    - "Net "
+    - "Gross "
+    - "Total "
+    - "Non-"
+    - "3rd Party "
+
+  # Standard synonyms / aliases for cross-report metric alignment
+  synonyms:
+    "active policy count": "Policy Count"
+    "count": "Policy Count"
+    "tax reserve": "2024 EB Tax Reserve"
+    "lnbar 2024 eb tax reserve": "2024 EB Tax Reserve"
+    "2024 eb face": "Face"
+    "lnbar 2024 eb face": "Face"
