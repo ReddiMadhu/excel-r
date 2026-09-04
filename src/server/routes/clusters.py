@@ -15,7 +15,7 @@ GET /api/governance/clusters/{cluster_id}/multi-compare?workbook_ids=1,2,3
 """
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 
